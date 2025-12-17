@@ -1,0 +1,27 @@
+# PixelHop - Python AI Dependencies
+# For OCR and Background Removal Tools
+# 
+# Installation:
+#   python3 -m venv /var/www/pichost/python/venv
+#   source /var/www/pichost/python/venv/bin/activate
+#   pip install -r requirements.txt
+#
+# Note: paddlepaddle-gpu for CUDA support (optional)
+
+# PaddleOCR - Superior multilingual OCR
+paddlepaddle>=2.6.0
+paddleocr>=2.7.0
+
+# Background Removal
+rembg>=2.0.50
+
+# ONNX Runtime for AI inference
+onnxruntime>=1.16.0
+
+# Core dependencies
+numpy>=1.24.0
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0
+
+# Additional utilities
+python-multipart>=0.0.6

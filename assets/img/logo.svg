@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="earGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea"/>
+      <stop offset="100%" style="stop-color:#764ba2"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Left Ear -->
+  <path d="M25 48 Q20 8, 35 5 Q50 2, 40 48" fill="url(#earGradient)"/>
+  
+  <!-- Right Ear -->
+  <path d="M75 48 Q80 8, 65 5 Q50 2, 60 48" fill="url(#earGradient)"/>
+  
+  <!-- Head -->
+  <ellipse cx="50" cy="62" rx="32" ry="30" fill="url(#earGradient)"/>
+  
+  <!-- Inner Left Ear -->
+  <path d="M28 45 Q25 18, 36 15 Q44 13, 38 45" fill="rgba(255,255,255,0.3)"/>
+  
+  <!-- Inner Right Ear -->
+  <path d="M72 45 Q75 18, 64 15 Q56 13, 62 45" fill="rgba(255,255,255,0.3)"/>
+  
+  <!-- Left Eye -->
+  <ellipse cx="38" cy="55" rx="6" ry="7" fill="white"/>
+  <circle cx="40" cy="54" r="3" fill="#1a1f2e"/>
+  <circle cx="41" cy="52" r="1" fill="white"/>
+  
+  <!-- Right Eye -->
+  <ellipse cx="62" cy="55" rx="6" ry="7" fill="white"/>
+  <circle cx="64" cy="54" r="3" fill="#1a1f2e"/>
+  <circle cx="65" cy="52" r="1" fill="white"/>
+  
+  <!-- Nose -->
+  <ellipse cx="50" cy="68" rx="5" ry="4" fill="#ec4899"/>
+  
+  <!-- Mouth -->
+  <path d="M50 72 Q44 80, 42 75" stroke="#1a1f2e" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  <path d="M50 72 Q56 80, 58 75" stroke="#1a1f2e" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  
+  <!-- Whiskers Left -->
+  <line x1="18" y1="62" x2="32" y2="65" stroke="rgba(255,255,255,0.5)" stroke-width="1"/>
+  <line x1="16" y1="68" x2="31" y2="70" stroke="rgba(255,255,255,0.5)" stroke-width="1"/>
+  
+  <!-- Whiskers Right -->
+  <line x1="82" y1="62" x2="68" y2="65" stroke="rgba(255,255,255,0.5)" stroke-width="1"/>
+  <line x1="84" y1="68" x2="69" y2="70" stroke="rgba(255,255,255,0.5)" stroke-width="1"/>
+</svg>

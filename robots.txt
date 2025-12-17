@@ -1,0 +1,13 @@
+User-agent: *
+Allow: /
+
+# Static assets
+Disallow: /config/
+Disallow: /data/
+Disallow: /api/
+
+# Sitemap
+Sitemap: https://p.hel.ink/sitemap.xml
+
+# Crawl delay
+Crawl-delay: 1

@@ -213,6 +213,31 @@ $siteName = $config['site']['name'];
 
                 <div class="faq-item">
                     <div class="faq-question" onclick="toggleFaq(this)">
+                        <span>How do I see my image view counts?</span>
+                        <i data-lucide="chevron-down" class="w-5 h-5 faq-icon"></i>
+                    </div>
+                    <div class="faq-answer">
+                        View counts are displayed in two places:
+                        <ul style="margin-top: 12px; padding-left: 20px;">
+                            <li><strong>Image Page:</strong> Click the "Info" button on any image page to see view count and last viewed date</li>
+                            <li><strong>Your Gallery:</strong> View counts are shown on each image in your personal gallery dashboard</li>
+                        </ul>
+                        View counts update once per hour per unique visitor.
+                    </div>
+                </div>
+
+                <div class="faq-item">
+                    <div class="faq-question" onclick="toggleFaq(this)">
+                        <span>How do I report inappropriate content?</span>
+                        <i data-lucide="chevron-down" class="w-5 h-5 faq-icon"></i>
+                    </div>
+                    <div class="faq-answer">
+                        If you find content that violates our Terms of Service, click the <strong>Report</strong> button on the image page. Select a reason (NSFW, Illegal, Privacy violation, Copyright, or Other) and submit. Our team reviews all reports within 24-72 hours.
+                    </div>
+                </div>
+
+                <div class="faq-item">
+                    <div class="faq-question" onclick="toggleFaq(this)">
                         <span>Do I need an account to use PixelHop?</span>
                         <i data-lucide="chevron-down" class="w-5 h-5 faq-icon"></i>
                     </div>

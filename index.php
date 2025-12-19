@@ -598,6 +598,7 @@ $isAdmin = $isLoggedIn && isAdmin();
                             <?php endif; ?>
                             <li><a href="/docs" class="footer-link">API Docs</a></li>
                             <li><a href="/help" class="footer-link">Help Center</a></li>
+                            <li><a href="/changelog" class="footer-link">What's New</a></li>
                         </ul>
                     </div>
 

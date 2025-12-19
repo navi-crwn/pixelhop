@@ -94,12 +94,29 @@ $siteName = $config['site']['name'];
                 <h2>4. Content Ownership</h2>
                 <p>You retain all ownership rights to content you upload. By uploading, you grant PixelHop a non-exclusive license to store, display, and process your images as necessary to provide the Service.</p>
 
-                <h2>5. Content Removal</h2>
-                <p>We reserve the right to remove any content that violates these terms without notice. Repeated violations may result in permanent bans.</p>
+                <h2>5. Content Removal & Reporting</h2>
+                <p>We reserve the right to remove any content that violates these terms without notice. Users can report inappropriate content using the Report button on any image page.</p>
+                <p><strong>Report reasons include:</strong></p>
+                <ul>
+                    <li>NSFW/Adult content</li>
+                    <li>Illegal content</li>
+                    <li>Privacy violation</li>
+                    <li>Copyright infringement</li>
+                    <li>Other violations</li>
+                </ul>
+                <p>All reports are reviewed within 24-72 hours. Repeated violations may result in account restrictions or permanent bans.</p>
 
-                <h2>6. Data Retention & Temporary Files</h2>
+                <h2>6. Account Status & Enforcement</h2>
+                <p>Accounts may be subject to the following enforcement actions:</p>
+                <ul>
+                    <li><strong>Warning:</strong> A notice will be displayed on your next login for minor violations</li>
+                    <li><strong>Locked:</strong> Account access suspended pending review. Contact support@hel.ink to appeal</li>
+                    <li><strong>Suspended:</strong> Account and all images become inaccessible. Suspended accounts and their content are permanently deleted after 30 days</li>
+                </ul>
+
+                <h2>7. Data Retention & Temporary Files</h2>
                 <p><strong>Permanent Storage:</strong> Images uploaded through the main upload feature are stored on our cloud infrastructure indefinitely, subject to our content policies.</p>
-                <p><strong>Inactive Image Policy:</strong> Public (guest) uploads that have not been viewed for 90 consecutive days may be automatically removed to optimize storage. Registered users' images are exempt from this policy.</p>
+                <p><strong>Inactive Image Policy:</strong> Public (guest) uploads that have not been viewed for 90 consecutive days may be automatically removed to optimize storage. Registered users' images are exempt from this policy as long as they are viewed periodically.</p>
                 <p><strong>Temporary Processing Files:</strong> Files processed through our image tools (compress, resize, convert, crop, OCR, RemBG) are stored in <strong>temporary storage only</strong> and are <strong>automatically deleted after 6 hours</strong>. These processed files are NOT uploaded to permanent storage. Users must download processed files immediately or use the "Upload Result" feature to save them permanently.</p>
                 <p><strong>No Backup Guarantee:</strong> While we strive to maintain reliable storage, we do not guarantee data preservation. Users are encouraged to keep personal backups of important images.</p>
 

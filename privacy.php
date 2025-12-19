@@ -77,6 +77,7 @@ $siteName = $config['site']['name'];
                     <li>Browser type and version</li>
                     <li>Upload timestamps</li>
                     <li>Image metadata (dimensions, file size, format)</li>
+                    <li>View counts and last viewed timestamps (for analytics)</li>
                 </ul>
 
                 <h2>2. How We Use Information</h2>
@@ -86,6 +87,7 @@ $siteName = $config['site']['name'];
                     <li>Process and deliver your uploaded images</li>
                     <li>Manage your user account and preferences</li>
                     <li>Track usage quotas (storage, OCR, RemBG limits)</li>
+                    <li>Provide view analytics for your images</li>
                     <li>Prevent abuse and enforce our Terms of Service</li>
                     <li>Improve our Service through analytics</li>
                 </ul>

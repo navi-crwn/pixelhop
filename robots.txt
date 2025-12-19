@@ -1,10 +1,43 @@
+# PicHost - p.hel.ink
+# Last updated: 2025-12-19
+
 User-agent: *
 Allow: /
+Allow: /features
+Allow: /docs
+Allow: /changelog
+Allow: /help
+Allow: /contact
+Allow: /terms
+Allow: /privacy
+Allow: /dmca
 
-# Static assets
+# Protected areas (require login)
+Disallow: /dashboard
+Disallow: /gallery
+Disallow: /tools
+Disallow: /member/
+Disallow: /admin
+Disallow: /admin/
+Disallow: /login
+Disallow: /register
+
+# System directories
 Disallow: /config/
 Disallow: /data/
 Disallow: /api/
+Disallow: /auth/
+Disallow: /core/
+Disallow: /cron/
+Disallow: /database/
+Disallow: /includes/
+Disallow: /backup/
+Disallow: /temp/
+Disallow: /vendor/
+Disallow: /python/
+
+# Image proxy (allow for sharing)
+Allow: /i/
 
 # Sitemap
 Sitemap: https://p.hel.ink/sitemap.xml

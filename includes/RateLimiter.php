@@ -8,6 +8,8 @@
  * - Logged-in users: 50 requests per minute per user
  */
 
+require_once __DIR__ . '/ClientIp.php';
+
 class RateLimiter
 {
     private const GUEST_LIMIT = 10;
@@ -115,23 +117,7 @@ class RateLimiter
      */
     public function getClientIp(): string
     {
-
-        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
-            return $_SERVER['HTTP_CF_CONNECTING_IP'];
-        }
-
-
-        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-            return trim($ips[0]);
-        }
-
-
-        if (!empty($_SERVER['HTTP_X_REAL_IP'])) {
-            return $_SERVER['HTTP_X_REAL_IP'];
-        }
-
-        return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+        return ClientIp::get();
     }
 
     /**

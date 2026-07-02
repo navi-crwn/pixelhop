@@ -21,7 +21,8 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 // Rate limiting - max 5 reports per IP per hour
-$ip = $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'];
+require_once __DIR__ . '/../includes/ClientIp.php';
+$ip = ClientIp::get();
 $rateLimitFile = __DIR__ . '/../data/ratelimit/report_' . md5($ip) . '.json';
 
 $rateLimitDir = dirname($rateLimitFile);

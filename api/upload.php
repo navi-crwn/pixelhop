@@ -58,12 +58,9 @@ $config = require __DIR__ . '/../config/s3.php';
 
 // AbuseGuard check - before processing upload
 require_once __DIR__ . '/../core/AbuseGuard.php';
+require_once __DIR__ . '/../includes/ClientIp.php';
 $abuseGuard = new AbuseGuard();
-$clientIP = $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-// Handle comma-separated IPs from X-Forwarded-For
-if (strpos($clientIP, ',') !== false) {
-    $clientIP = trim(explode(',', $clientIP)[0]);
-}
+$clientIP = ClientIp::get();
 
 session_start();
 $sessionUserId = $_SESSION['user_id'] ?? null;
@@ -397,7 +394,7 @@ try {
         'storage_providers' => $storageProviders, // Track R2 vs Contabo per size
         'created_at' => $timestamp,
         'delete_at' => $deleteAt,
-        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+        'ip' => $clientIP,
     ];
 
     saveImageData($imageId, $imageData);

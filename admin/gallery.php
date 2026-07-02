@@ -70,7 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             }
         }
         
-        file_put_contents($imagesFile, json_encode($images, JSON_PRETTY_PRINT));
+        file_put_contents($imagesFile, json_encode($images, JSON_PRETTY_PRINT), LOCK_EX);
         
         echo json_encode([
             'success' => true, 
@@ -119,7 +119,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             }
         }
         
-        file_put_contents($imagesFile, json_encode($images, JSON_PRETTY_PRINT));
+        file_put_contents($imagesFile, json_encode($images, JSON_PRETTY_PRINT), LOCK_EX);
         
         echo json_encode([
             'success' => true, 

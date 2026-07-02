@@ -3,6 +3,14 @@
  * PixelHop - Admin Dashboard
  * Statistics and management interface
  */
+session_start();
+require_once __DIR__ . '/auth/middleware.php';
+
+if (!isAuthenticated() || !isAdmin()) {
+    header('Location: /login.php?error=access_denied');
+    exit;
+}
+
 $config = require __DIR__ . '/config/s3.php';
 $siteName = $config['site']['name'];
 ?>

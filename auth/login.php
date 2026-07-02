@@ -70,12 +70,10 @@ try {
     );
 
 
-    logLoginAttempt($clientIp, $email, false);
-
-
     if (!$user) {
 
         password_verify($password, '$argon2id$v=19$m=65536,t=4,p=1$fake$fakehash');
+        logLoginAttempt($clientIp, $email, false);
         jsonResponse(false, 'Invalid email or password', 401);
     }
 
@@ -124,6 +122,8 @@ try {
             'UPDATE users SET login_attempts = ?, locked_until = ? WHERE id = ?',
             [$attempts, $lockUntil, $user['id']]
         );
+
+        logLoginAttempt($clientIp, $email, false);
 
         if ($lockUntil) {
             jsonResponse(false, 'Too many failed attempts. Account locked for 15 minutes.', 403);

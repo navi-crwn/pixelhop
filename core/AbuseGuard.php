@@ -28,7 +28,34 @@ class AbuseGuard
     public function __construct()
     {
         $this->db = Database::getInstance();
+        $this->ensureTables();
         $this->loadSettings();
+    }
+
+    /**
+     * Ensure required tables exist
+     * (blocked_ips is created by SecurityFirewall with a blocked_until column)
+     */
+    private function ensureTables(): void
+    {
+        try {
+            $this->db->exec("
+                CREATE TABLE IF NOT EXISTS abuse_logs (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    ip_address VARCHAR(45) NOT NULL,
+                    user_id INT UNSIGNED NULL,
+                    abuse_type VARCHAR(32) NOT NULL,
+                    severity VARCHAR(16) NOT NULL DEFAULT 'low',
+                    details TEXT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+                    INDEX idx_ip (ip_address),
+                    INDEX idx_created_at (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ");
+        } catch (Exception $e) {
+            error_log('AbuseGuard: ensureTables failed - ' . $e->getMessage());
+        }
     }
 
     /**
@@ -66,13 +93,18 @@ class AbuseGuard
      */
     public function isBlocked(string $ip): bool
     {
-        $stmt = $this->db->prepare("
-            SELECT id FROM blocked_ips
-            WHERE ip_address = ?
-            AND (expires_at IS NULL OR expires_at > NOW())
-        ");
-        $stmt->execute([$ip]);
-        return (bool) $stmt->fetch();
+        try {
+            $stmt = $this->db->prepare("
+                SELECT id FROM blocked_ips
+                WHERE ip_address = ?
+                AND (blocked_until IS NULL OR blocked_until > NOW())
+            ");
+            $stmt->execute([$ip]);
+            return (bool) $stmt->fetch();
+        } catch (Exception $e) {
+            error_log('AbuseGuard: isBlocked check failed - ' . $e->getMessage());
+            return false;
+        }
     }
 
     /**
@@ -88,11 +120,11 @@ class AbuseGuard
 
         try {
             $stmt = $this->db->prepare("
-                INSERT INTO blocked_ips (ip_address, reason, blocked_by, expires_at)
-                VALUES (?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE reason = VALUES(reason), expires_at = VALUES(expires_at)
+                INSERT INTO blocked_ips (ip_address, reason, blocked_until)
+                VALUES (?, ?, ?)
+                ON DUPLICATE KEY UPDATE reason = VALUES(reason), blocked_until = VALUES(blocked_until)
             ");
-            return $stmt->execute([$ip, $reason, $blockedBy, $expiresAt]);
+            return $stmt->execute([$ip, "[{$blockedBy}] {$reason}", $expiresAt]);
         } catch (Exception $e) {
             error_log('AbuseGuard: Failed to block IP - ' . $e->getMessage());
             return false;
@@ -113,12 +145,17 @@ class AbuseGuard
      */
     public function logAbuse(string $ip, string $type, string $severity = 'low', ?int $userId = null, string $details = ''): int
     {
-        $stmt = $this->db->prepare("
-            INSERT INTO abuse_logs (ip_address, user_id, abuse_type, severity, details)
-            VALUES (?, ?, ?, ?, ?)
-        ");
-        $stmt->execute([$ip, $userId, $type, $severity, $details]);
-        return (int) $this->db->lastInsertId();
+        try {
+            $stmt = $this->db->prepare("
+                INSERT INTO abuse_logs (ip_address, user_id, abuse_type, severity, details)
+                VALUES (?, ?, ?, ?, ?)
+            ");
+            $stmt->execute([$ip, $userId, $type, $severity, $details]);
+            return (int) $this->db->lastInsertId();
+        } catch (Exception $e) {
+            error_log('AbuseGuard: Failed to log abuse - ' . $e->getMessage());
+            return 0;
+        }
     }
 
     /**
@@ -404,9 +441,14 @@ class AbuseGuard
      */
     public function cleanExpiredBlocks(): int
     {
-        $stmt = $this->db->prepare("DELETE FROM blocked_ips WHERE expires_at IS NOT NULL AND expires_at <= NOW()");
-        $stmt->execute();
-        return $stmt->rowCount();
+        try {
+            $stmt = $this->db->prepare("DELETE FROM blocked_ips WHERE blocked_until IS NOT NULL AND blocked_until <= NOW()");
+            $stmt->execute();
+            return $stmt->rowCount();
+        } catch (Exception $e) {
+            error_log('AbuseGuard: Failed to clean expired blocks - ' . $e->getMessage());
+            return 0;
+        }
     }
 
     /**
@@ -457,7 +499,7 @@ class AbuseGuard
         $stats = [];
 
 
-        $stmt = $this->db->query("SELECT COUNT(*) FROM blocked_ips WHERE expires_at IS NULL OR expires_at > NOW()");
+        $stmt = $this->db->query("SELECT COUNT(*) FROM blocked_ips WHERE blocked_until IS NULL OR blocked_until > NOW()");
         $stats['blocked_ips'] = (int) $stmt->fetchColumn();
 
 

@@ -92,6 +92,8 @@ class ImageHandler
             throw new InvalidArgumentException('Only HTTP/HTTPS URLs are allowed');
         }
 
+        self::assertPublicUrl($url);
+
 
         $headers = $this->getUrlHeaders($url);
 
@@ -137,6 +139,41 @@ class ImageHandler
     }
 
     /**
+     * Validate that a URL does not resolve to a private/internal address (SSRF guard)
+     */
+    public static function assertPublicUrl(string $url): void
+    {
+        $host = parse_url($url, PHP_URL_HOST);
+        if (!$host) {
+            throw new InvalidArgumentException('Invalid URL host');
+        }
+
+        // Strip brackets from IPv6 literals
+        $host = trim($host, '[]');
+
+        // Resolve hostname to IPs (literal IPs pass straight through)
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            $ips = [$host];
+        } else {
+            $records = @dns_get_record($host, DNS_A + DNS_AAAA) ?: [];
+            $ips = [];
+            foreach ($records as $record) {
+                if (!empty($record['ip'])) $ips[] = $record['ip'];
+                if (!empty($record['ipv6'])) $ips[] = $record['ipv6'];
+            }
+            if (empty($ips)) {
+                throw new InvalidArgumentException('Could not resolve URL host');
+            }
+        }
+
+        foreach ($ips as $ip) {
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                throw new InvalidArgumentException('URL points to a private or internal address');
+            }
+        }
+    }
+
+    /**
      * Get URL headers without downloading body
      */
     private function getUrlHeaders(string $url): array
@@ -148,6 +185,8 @@ class ImageHandler
             CURLOPT_NOBODY => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 5,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_TIMEOUT => 10,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_USERAGENT => 'PixelHop/1.0 (Image Downloader)',
@@ -199,6 +238,8 @@ class ImageHandler
             CURLOPT_FILE => $fp,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 5,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_TIMEOUT => 60,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_USERAGENT => 'PixelHop/1.0 (Image Downloader)',
@@ -216,7 +257,7 @@ class ImageHandler
         $error = curl_error($ch);
         fclose($fp);
 
-
+        clearstatcache(true, $destPath);
         if (filesize($destPath) > $maxSize) {
             unlink($destPath);
             throw new InvalidArgumentException('Downloaded file exceeds maximum size');

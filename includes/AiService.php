@@ -188,25 +188,26 @@ class AiService
     {
         $startTime = microtime(true);
 
-
-        $output = shell_exec($command);
+        $outputLines = [];
+        $exitCode = 0;
+        exec($command, $outputLines, $exitCode);
+        $output = implode("\n", $outputLines);
 
         $duration = round((microtime(true) - $startTime) * 1000);
 
-        if ($output === null) {
+        // GNU timeout exits with 124 when the command timed out
+        if ($exitCode === 124) {
+            return [
+                'success' => false,
+                'error' => $operation . ' timed out after ' . $this->timeout . ' seconds',
+                'code' => 504,
+                'duration_ms' => $duration,
+            ];
+        }
 
-            $exitCode = 0;
-            exec('echo $?', $_, $exitCode);
-
-            if ($exitCode === 124) {
-                return [
-                    'success' => false,
-                    'error' => $operation . ' timed out after ' . $this->timeout . ' seconds',
-                    'code' => 504,
-                    'duration_ms' => $duration,
-                ];
-            }
-
+        // The Python engines print a JSON payload even on failure (then exit 1),
+        // so only bail out here when there is nothing to parse
+        if (trim($output) === '') {
             return [
                 'success' => false,
                 'error' => $operation . ' failed to execute',

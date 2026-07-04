@@ -130,7 +130,7 @@ try {
 
         if (empty($existingUser['google_id'])) {
             Database::execute(
-                'UPDATE users SET google_id = ?, avatar_url = ?, email_verified_at = NOW() WHERE id = ?',
+                'UPDATE users SET google_id = ?, avatar_url = ?, email_verified = 1, email_verified_at = NOW() WHERE id = ?',
                 [$googleId, $picture, $existingUser['id']]
             );
         }
@@ -151,8 +151,8 @@ try {
         ]);
 
         Database::execute(
-            'INSERT INTO users (email, password_hash, google_id, avatar_url, storage_limit, email_verified_at, role, account_type, created_at)
-             VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, NOW())',
+            'INSERT INTO users (email, password_hash, google_id, avatar_url, storage_limit, email_verified, email_verified_at, role, account_type, created_at)
+             VALUES (?, ?, ?, ?, ?, 1, NOW(), ?, ?, NOW())',
             [$email, $passwordHash, $googleId, $picture, $storageLimit, 'user', 'free']
         );
 

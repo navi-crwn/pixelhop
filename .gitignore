@@ -4,6 +4,8 @@ config/database.php
 config/oauth.php
 config/s3.php
 config/mail.php
+config/turnstile.php
+config/security.php
 .env
 
 # Backup files

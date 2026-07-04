@@ -78,8 +78,7 @@ header('X-Content-Type-Options: nosniff');
 header('Accept-Ranges: bytes');
 
 // Handle range requests for partial content
-if (isset($_SERVER['HTTP_RANGE'])) {
-    preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $rangeMatches);
+if (isset($_SERVER['HTTP_RANGE']) && preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $rangeMatches)) {
     $start = intval($rangeMatches[1]);
     $end = $rangeMatches[2] !== '' ? intval($rangeMatches[2]) : $contentLength - 1;
 

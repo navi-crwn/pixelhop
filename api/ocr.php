@@ -128,6 +128,11 @@ try {
         $language = $langMap[$language];
     }
 
+    // Reject anything not in the supported language list
+    if (!isset($validLanguages[$language])) {
+        $language = 'en';
+    }
+
 
     $result = $aiService->performOcr($imageData['path'], $language);
 

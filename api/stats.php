@@ -1,11 +1,20 @@
 <?php
 /**
  * PixelHop - Statistics API
- * Returns site-wide statistics for dashboard
+ * Returns site-wide statistics for the admin dashboard
  */
 
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
+
+// Admin-only endpoint (consumed by admin.php dashboard)
+session_start();
+require_once __DIR__ . '/../auth/middleware.php';
+
+if (!isAuthenticated() || !isAdmin()) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'Forbidden']);
+    exit;
+}
 
 $config = require __DIR__ . '/../config/s3.php';
 $imagesFile = __DIR__ . '/../data/images.json';
@@ -17,24 +26,20 @@ if (file_exists($imagesFile)) {
 }
 
 // Calculate statistics
+// Data model (see api/upload.php): created_at = unix timestamp,
+// size = original file size in bytes, extension = file format
 $totalImages = count($images);
 $totalSize = 0;
 $formats = [];
 $uploadsByDate = [];
-$recentUploads = [];
 
 foreach ($images as $image) {
+    $totalSize += (int) ($image['size'] ?? 0);
 
-    if (isset($image['sizes']['original']['size'])) {
-        $totalSize += $image['sizes']['original']['size'];
-    }
-
-
-    $format = strtoupper($image['format'] ?? 'unknown');
+    $format = strtoupper($image['extension'] ?? 'unknown');
     $formats[$format] = ($formats[$format] ?? 0) + 1;
 
-
-    $uploadDate = date('Y-m-d', strtotime($image['uploaded_at'] ?? 'now'));
+    $uploadDate = date('Y-m-d', (int) ($image['created_at'] ?? 0));
     $uploadsByDate[$uploadDate] = ($uploadsByDate[$uploadDate] ?? 0) + 1;
 }
 
@@ -49,30 +54,31 @@ for ($i = 29; $i >= 0; $i--) {
 }
 
 // Get recent uploads (last 10)
-$sortedImages = $images;
+$sortedImages = array_values($images);
 usort($sortedImages, function($a, $b) {
-    return strtotime($b['uploaded_at'] ?? 0) - strtotime($a['uploaded_at'] ?? 0);
+    return ($b['created_at'] ?? 0) <=> ($a['created_at'] ?? 0);
 });
 $recentUploads = array_slice($sortedImages, 0, 10);
 
 // Format recent uploads for response
-$recentFormatted = array_map(function($img) {
+$siteUrl = $config['site']['url'] ?? '';
+$recentFormatted = array_map(function($img) use ($siteUrl) {
+    $thumbKey = $img['s3_keys']['thumb'] ?? null;
     return [
-        'id' => $img['id'],
-        'filename' => $img['original_name'] ?? $img['filename'],
-        'format' => strtoupper($img['format'] ?? 'unknown'),
-        'size' => $img['sizes']['original']['size'] ?? 0,
-        'uploaded_at' => $img['uploaded_at'],
-        'thumbnail' => $img['sizes']['thumbnail']['url'] ?? $img['sizes']['small']['url'] ?? null
+        'id' => $img['id'] ?? '',
+        'filename' => $img['filename'] ?? 'unknown',
+        'format' => strtoupper($img['extension'] ?? 'unknown'),
+        'size' => (int) ($img['size'] ?? 0),
+        'uploaded_at' => date('Y-m-d H:i:s', (int) ($img['created_at'] ?? 0)),
+        'thumbnail' => $thumbKey ? $siteUrl . '/i/' . $thumbKey : null,
     ];
 }, $recentUploads);
 
 // Calculate storage breakdown by format
 $storageByFormat = [];
 foreach ($images as $image) {
-    $format = strtoupper($image['format'] ?? 'unknown');
-    $size = $image['sizes']['original']['size'] ?? 0;
-    $storageByFormat[$format] = ($storageByFormat[$format] ?? 0) + $size;
+    $format = strtoupper($image['extension'] ?? 'unknown');
+    $storageByFormat[$format] = ($storageByFormat[$format] ?? 0) + (int) ($image['size'] ?? 0);
 }
 arsort($storageByFormat);
 

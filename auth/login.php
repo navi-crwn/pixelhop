@@ -70,12 +70,10 @@ try {
     );
 
 
-    logLoginAttempt($clientIp, $email, false);
-
-
     if (!$user) {
 
         password_verify($password, '$argon2id$v=19$m=65536,t=4,p=1$fake$fakehash');
+        logLoginAttempt($clientIp, $email, false);
         jsonResponse(false, 'Invalid email or password', 401);
     }
 
@@ -124,6 +122,8 @@ try {
             'UPDATE users SET login_attempts = ?, locked_until = ? WHERE id = ?',
             [$attempts, $lockUntil, $user['id']]
         );
+
+        logLoginAttempt($clientIp, $email, false);
 
         if ($lockUntil) {
             jsonResponse(false, 'Too many failed attempts. Account locked for 15 minutes.', 403);
@@ -215,24 +215,8 @@ try {
  */
 function getClientIp(): string
 {
-    $headers = [
-        'HTTP_CF_CONNECTING_IP',
-        'HTTP_X_FORWARDED_FOR',
-        'HTTP_X_REAL_IP',
-        'REMOTE_ADDR'
-    ];
-
-    foreach ($headers as $header) {
-        if (!empty($_SERVER[$header])) {
-            $ips = explode(',', $_SERVER[$header]);
-            $ip = trim($ips[0]);
-            if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                return $ip;
-            }
-        }
-    }
-
-    return '0.0.0.0';
+    require_once __DIR__ . '/../includes/ClientIp.php';
+    return ClientIp::get();
 }
 
 /**

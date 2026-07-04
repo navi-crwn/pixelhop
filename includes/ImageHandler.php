@@ -167,9 +167,32 @@ class ImageHandler
         }
 
         foreach ($ips as $ip) {
-            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            if (!self::isPublicIp($ip)) {
                 throw new InvalidArgumentException('URL points to a private or internal address');
             }
+        }
+    }
+
+    /**
+     * Is the given IP address publicly routable (not private/reserved)?
+     */
+    public static function isPublicIp(string $ip): bool
+    {
+        return $ip !== ''
+            && (bool) filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+    }
+
+    /**
+     * Reject the request if curl actually connected to a private/internal IP.
+     * Closes the redirect-based SSRF gap: assertPublicUrl only vets the initial
+     * host, but CURLOPT_FOLLOWLOCATION may land on an internal address, so we
+     * verify the peer curl really talked to after the transfer.
+     */
+    public static function assertConnectedIpPublic(\CurlHandle $ch): void
+    {
+        $primaryIp = (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP);
+        if ($primaryIp !== '' && !self::isPublicIp($primaryIp)) {
+            throw new InvalidArgumentException('URL resolved to a private or internal address');
         }
     }
 
@@ -195,6 +218,9 @@ class ImageHandler
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
+
+        // Guard against redirect-based SSRF (final peer must be public)
+        self::assertConnectedIpPublic($ch);
 
         if ($error) {
             throw new RuntimeException('Failed to fetch URL: ' . $error);
@@ -255,7 +281,17 @@ class ImageHandler
 
         $success = curl_exec($ch);
         $error = curl_error($ch);
+
+        // Guard against redirect-based SSRF (final peer must be public)
+        $connectedIp = (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP);
         fclose($fp);
+
+        if ($connectedIp !== '' && !self::isPublicIp($connectedIp)) {
+            if (file_exists($destPath)) {
+                unlink($destPath);
+            }
+            throw new InvalidArgumentException('URL resolved to a private or internal address');
+        }
 
         clearstatcache(true, $destPath);
         if (filesize($destPath) > $maxSize) {

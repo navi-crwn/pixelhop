@@ -130,8 +130,15 @@ if (!empty($remoteUrl)) {
     $imageData = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+    $connectedIp = (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP);
     $curlError = curl_error($ch);
-    
+
+    // SSRF guard: reject if a redirect landed on a private/internal address
+    if ($connectedIp !== '' && !ImageHandler::isPublicIp($connectedIp)) {
+        uploadDebug('remote_ssrf_block', ['ip' => $connectedIp, 'url' => $remoteUrl]);
+        jsonResponse(false, 'URL resolved to a private or internal address');
+    }
+
     if ($curlError) {
         uploadDebug('remote_fetch_error', ['error' => $curlError, 'url' => $remoteUrl]);
         jsonResponse(false, 'Failed to fetch image: ' . $curlError);

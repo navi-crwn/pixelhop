@@ -112,7 +112,7 @@ class AbuseGuard
             $stmt = $this->db->prepare("
                 SELECT id FROM blocked_ips
                 WHERE ip_address = ?
-                AND (blocked_until IS NULL OR blocked_until > NOW())
+                AND (expires_at IS NULL OR expires_at > NOW())
             ");
             $stmt->execute([$ip]);
             return (bool) $stmt->fetch();
@@ -135,9 +135,9 @@ class AbuseGuard
 
         try {
             $stmt = $this->db->prepare("
-                INSERT INTO blocked_ips (ip_address, reason, blocked_until)
+                INSERT INTO blocked_ips (ip_address, reason, expires_at)
                 VALUES (?, ?, ?)
-                ON DUPLICATE KEY UPDATE reason = VALUES(reason), blocked_until = VALUES(blocked_until)
+                ON DUPLICATE KEY UPDATE reason = VALUES(reason), expires_at = VALUES(expires_at)
             ");
             return $stmt->execute([$ip, "[{$blockedBy}] {$reason}", $expiresAt]);
         } catch (Exception $e) {
@@ -582,7 +582,7 @@ class AbuseGuard
     public function cleanExpiredBlocks(): int
     {
         try {
-            $stmt = $this->db->prepare("DELETE FROM blocked_ips WHERE blocked_until IS NOT NULL AND blocked_until <= NOW()");
+            $stmt = $this->db->prepare("DELETE FROM blocked_ips WHERE expires_at IS NOT NULL AND expires_at <= NOW()");
             $stmt->execute();
             return $stmt->rowCount();
         } catch (Exception $e) {
@@ -639,7 +639,7 @@ class AbuseGuard
         $stats = [];
 
 
-        $stmt = $this->db->query("SELECT COUNT(*) FROM blocked_ips WHERE blocked_until IS NULL OR blocked_until > NOW()");
+        $stmt = $this->db->query("SELECT COUNT(*) FROM blocked_ips WHERE expires_at IS NULL OR expires_at > NOW()");
         $stats['blocked_ips'] = (int) $stmt->fetchColumn();
 
 

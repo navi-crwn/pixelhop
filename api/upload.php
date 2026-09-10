@@ -97,7 +97,7 @@ $_tokenBypass = false;
 if ($_preAuthToken) {
     require_once __DIR__ . '/../includes/Database.php';
     $_tokenCheckDb = Database::getInstance();
-    $_tokenCheckStmt = $_tokenCheckDb->prepare('SELECT id FROM users WHERE upload_token = ? AND is_blocked = 0 LIMIT 1');
+    $_tokenCheckStmt = $_tokenCheckDb->prepare("SELECT id FROM users WHERE upload_token = ? AND is_blocked = 0 AND account_status = 'active' LIMIT 1");
     $_tokenCheckStmt->execute([$_preAuthToken]);
     if ($_tokenCheckStmt->fetch()) {
         $_tokenBypass = true;
@@ -137,7 +137,7 @@ if (!$sessionUserId) {
     if ($uploadToken) {
         require_once __DIR__ . '/../includes/Database.php';
         $tokenDb = Database::getInstance();
-        $tokenStmt = $tokenDb->prepare('SELECT id FROM users WHERE upload_token = ? AND is_blocked = 0 LIMIT 1');
+        $tokenStmt = $tokenDb->prepare("SELECT id FROM users WHERE upload_token = ? AND is_blocked = 0 AND account_status = 'active' LIMIT 1");
         $tokenStmt->execute([$uploadToken]);
         $tokenUser = $tokenStmt->fetch(PDO::FETCH_ASSOC);
         if ($tokenUser) {
@@ -146,10 +146,11 @@ if (!$sessionUserId) {
     }
 }
 
-// CSRF verification for browser requests. Valid API-token (Shottr)
-// server-to-server requests are exempt because the token itself is the
-// credential and there is no browser session to forge.
-if (empty($_tokenBypass)) {
+// CSRF verification for authenticated browser sessions only.
+// Guest uploads have no session to protect, so no CSRF token is required
+// (AbuseGuard still limits abuse). API-token requests (Shottr) and the
+// pre-auth firewall bypass remain exempt as well.
+if (!empty($sessionUserId) && empty($_tokenBypass)) {
     $csrfToken = $_POST['csrf_token'] ?? null;
 
     if ($csrfToken === null) {
@@ -419,6 +420,11 @@ if (!mkdir($tempDir, 0755, true)) {
     jsonResponse(false, 'Failed to create temp directory');
 }
 
+// Initialized before try so the catch block can safely test them even when
+// an exception is thrown before storage upload begins (e.g. loadImage fails).
+$storageManager = null;
+$s3Keys = [];
+
 try {
 
     $sourceImage = loadImage($file['tmp_name'], $mimeType, $useImagick);
@@ -608,6 +614,14 @@ try {
     // Update global storage counter after a fully successful upload.
     $gatekeeper->updateGlobalStorage((int) $file['size']);
 
+    // Record successful upload in AbuseGuard counters. Guarded so a counter
+    // error never turns a successful upload into a failed response.
+    try {
+        $abuseGuard->recordUpload($clientIP, $sessionUserId, (int) $file['size']);
+    } catch (Throwable $recordException) {
+        error_log('PixelHop abuse counter update failed: ' . $recordException->getMessage());
+    }
+
     // Clean up remote temp file if any
     if ($tempFilePath && file_exists($tempFilePath)) {
         @unlink($tempFilePath);
@@ -651,7 +665,7 @@ try {
 
     // Compensate: delete S3 variants that were already uploaded for this
     // image before the failure (quota exceeded, DB/JSON failure, etc).
-    if (!empty($s3Keys)) {
+    if ($storageManager instanceof R2StorageManager && !empty($s3Keys)) {
         try {
             $storageManager->deleteImage($s3Keys, (int) $file['size']);
         } catch (Exception $deleteException) {

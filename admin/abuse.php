@@ -8,6 +8,7 @@ require_once __DIR__ . '/../includes/bootstrap.php';
 require_once __DIR__ . '/../auth/middleware.php';
 require_once __DIR__ . '/../includes/Database.php';
 require_once __DIR__ . '/../core/AbuseGuard.php';
+require_once __DIR__ . '/../includes/JsonStore.php';
 
 if (!isAuthenticated() || !isAdmin()) {
     header('Location: /login.php?error=access_denied');
@@ -101,15 +102,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $storageManager = new R2StorageManager($s3Config);
                 
                 $imagesFile = __DIR__ . '/../data/images.json';
-                $images = file_exists($imagesFile) ? json_decode(file_get_contents($imagesFile), true) ?: [] : [];
-                
-                if (isset($images[$imageId])) {
-                    $imgData = $images[$imageId];
-                    if (!empty($imgData['s3_keys'])) {
-                        $storageManager->deleteImage($imgData['s3_keys'], $imgData['size'] ?? 0);
-                    }
-                    unset($images[$imageId]);
-                    file_put_contents($imagesFile, json_encode($images, JSON_PRETTY_PRINT), LOCK_EX);
+                if (file_exists($imagesFile)) {
+                    $imagesStore = new JsonStore($imagesFile);
+                    $imagesStore->mutate(function($images) use ($imageId, $storageManager) {
+                        if (isset($images[$imageId])) {
+                            $imgData = $images[$imageId];
+                            if (!empty($imgData['s3_keys'])) {
+                                $storageManager->deleteImage($imgData['s3_keys'], $imgData['size'] ?? 0);
+                            }
+                            unset($images[$imageId]);
+                        }
+                        return $images;
+                    });
                 }
                 
                 file_put_contents($reportsFile, json_encode($reports, JSON_PRETTY_PRINT), LOCK_EX);
@@ -282,7 +286,7 @@ $currentPage = 'security';
                                 <tr data-ip="<?= htmlspecialchars($ip['ip_address']) ?>">
                                     <td><code><?= htmlspecialchars($ip['ip_address']) ?></code></td>
                                     <td><?= htmlspecialchars(substr($ip['reason'] ?? '-', 0, 40)) ?></td>
-                                    <td><?= $ip['blocked_until'] ? date('M j, H:i', strtotime($ip['blocked_until'])) : 'Permanent' ?></td>
+                                    <td><?= $ip['expires_at'] ? date('M j, H:i', strtotime($ip['expires_at'])) : 'Permanent' ?></td>
                                     <td>
                                         <button class="btn btn-secondary btn-unblock" style="padding: 6px 12px; font-size: 12px;">
                                             Unblock

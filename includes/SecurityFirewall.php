@@ -236,7 +236,7 @@ class SecurityFirewall
             $stmt = $this->db->prepare("
                 SELECT id FROM blocked_ips 
                 WHERE ip_address = ? 
-                AND (blocked_until IS NULL OR blocked_until > NOW())
+                AND (expires_at IS NULL OR expires_at > NOW())
             ");
             $stmt->execute([$this->clientIP]);
             return $stmt->fetch() !== false;
@@ -452,9 +452,9 @@ class SecurityFirewall
             $blockedUntil = $hours ? date('Y-m-d H:i:s', strtotime("+{$hours} hours")) : null;
             
             $stmt = $this->db->prepare("
-                INSERT INTO blocked_ips (ip_address, reason, blocked_until)
+                INSERT INTO blocked_ips (ip_address, reason, expires_at)
                 VALUES (?, ?, ?)
-                ON DUPLICATE KEY UPDATE reason = VALUES(reason), blocked_until = VALUES(blocked_until)
+                ON DUPLICATE KEY UPDATE reason = VALUES(reason), expires_at = VALUES(expires_at)
             ");
             $stmt->execute([$ip, $reason, $blockedUntil]);
             
@@ -495,7 +495,7 @@ class SecurityFirewall
         
         try {
             $stmt = $this->db->query("
-                SELECT ip_address, reason, blocked_until, created_at 
+                SELECT ip_address, reason, expires_at, created_at 
                 FROM blocked_ips 
                 ORDER BY created_at DESC
             ");
@@ -546,7 +546,7 @@ class SecurityFirewall
         
         try {
             // Blocked IPs count
-            $stmt = $this->db->query("SELECT COUNT(*) FROM blocked_ips WHERE blocked_until IS NULL OR blocked_until > NOW()");
+            $stmt = $this->db->query("SELECT COUNT(*) FROM blocked_ips WHERE expires_at IS NULL OR expires_at > NOW()");
             $stats['blocked_ips'] = (int) $stmt->fetchColumn();
             
             // Events today
@@ -591,7 +591,7 @@ class SecurityFirewall
             $results['security_events'] = $stmt;
             
             // Remove expired blocks
-            $stmt = $this->db->exec("DELETE FROM blocked_ips WHERE blocked_until IS NOT NULL AND blocked_until < NOW()");
+            $stmt = $this->db->exec("DELETE FROM blocked_ips WHERE expires_at IS NOT NULL AND expires_at < NOW()");
             $results['expired_blocks'] = $stmt;
             
         } catch (PDOException $e) {

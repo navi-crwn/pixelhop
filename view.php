@@ -25,12 +25,9 @@ $imageId = preg_replace('/[^a-zA-Z0-9_\-]/', '', $imageId);
 
 // Load image data
 $dataFile = __DIR__ . '/data/images.json';
-$images = [];
-
-if (file_exists($dataFile)) {
-    $content = file_get_contents($dataFile);
-    $images = json_decode($content, true) ?: [];
-}
+require_once __DIR__ . '/includes/JsonStore.php';
+$store = new JsonStore($dataFile);
+$images = $store->read();
 
 // Check if image exists
 if (empty($imageId) || !isset($images[$imageId])) {
@@ -99,20 +96,25 @@ $lastViewed = $image['last_viewed_at'] ?? 0;
 
 // Only update once per hour per image to reduce disk writes
 if ($now - $lastViewed > 3600) {
-    // Increment view count
-    $images[$imageId]['view_count'] = ($image['view_count'] ?? 0) + 1;
-    $images[$imageId]['last_viewed_at'] = $now;
-    
-    // For guest uploads: clear any pending deletion marker since image was viewed
-    if (empty($image['user_id']) || $image['user_id'] === null) {
-        if (isset($images[$imageId]['marked_for_deletion'])) {
+    $images = $store->mutate(function($images) use ($imageId, $now) {
+        if (!isset($images[$imageId])) {
+            return $images;
+        }
+
+        // Increment view count
+        $images[$imageId]['view_count'] = ($images[$imageId]['view_count'] ?? 0) + 1;
+        $images[$imageId]['last_viewed_at'] = $now;
+
+        // For guest uploads: clear any pending deletion marker since image was viewed
+        if (empty($images[$imageId]['user_id'])) {
             unset($images[$imageId]['marked_for_deletion']);
         }
-    }
-    
-    file_put_contents($dataFile, json_encode($images, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), LOCK_EX);
+
+        return $images;
+    });
+
     // Reload image data after save
-    $image = $images[$imageId];
+    $image = $images[$imageId] ?? $image;
 }
 
 $siteUrl = $config['site']['url'];

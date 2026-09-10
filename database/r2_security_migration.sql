@@ -1,5 +1,7 @@
 -- ================================
 -- PixelHop - R2 & Security Tables Migration
+-- DEPRECATED: canonical schema now lives in database/schema.sql
+-- (blocked_ips uses `expires_at`, matching the live DB).
 -- Run: mysql -u pixelhop -p pixelhop < database/r2_security_migration.sql
 -- ================================
 
@@ -52,11 +54,11 @@ CREATE TABLE IF NOT EXISTS blocked_ips (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) NOT NULL,
     reason VARCHAR(255) NOT NULL,
-    blocked_until DATETIME NULL COMMENT 'NULL = permanent',
+    expires_at DATETIME NULL COMMENT 'NULL = permanent',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     
     UNIQUE KEY unique_ip (ip_address),
-    INDEX idx_blocked_until (blocked_until)
+    INDEX idx_expires_at (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Security: Events Log

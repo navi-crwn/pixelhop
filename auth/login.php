@@ -249,6 +249,35 @@ function isRateLimited(string $ip): bool
 
         return ($result['attempts'] ?? 0) >= 10;
     } catch (Exception $e) {
+        // Fail-closed-terkendali (pola firewall): DB error tidak boleh membuat
+        // rate-limit login lolos begitu saja. Izinkan hanya bila tombol darurat
+        // security_failopen_override aktif di site_settings.
+        if (isSecurityFailOpenOverride()) {
+            error_log('Login rate-limit DB error overridden by security_failopen_override: ' . $e->getMessage());
+            return false;
+        }
+
+        error_log('Login rate-limit DB error (fail-closed): ' . $e->getMessage());
+        return true;
+    }
+}
+
+/**
+ * Baca tombol darurat security_failopen_override dari site_settings.
+ *
+ * Bila DB tidak bisa dibaca, pilihan aman adalah TIDAK meng-override (false),
+ * sehingga pemanggil tetap fail-closed.
+ */
+function isSecurityFailOpenOverride(): bool
+{
+    try {
+        $row = Database::fetchOne(
+            "SELECT setting_value FROM site_settings WHERE setting_key = 'security_failopen_override'"
+        );
+
+        return (int) ($row['setting_value'] ?? 0) === 1;
+    } catch (Exception $e) {
+        error_log('Failed to read security_failopen_override: ' . $e->getMessage());
         return false;
     }
 }

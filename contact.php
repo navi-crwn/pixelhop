@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . '/includes/bootstrap.php';
+
 /**
  * PixelHop - Contact Us
  */
@@ -12,46 +14,71 @@ $error = '';
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $name = trim($_POST['name'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $subject = trim($_POST['subject'] ?? '');
-    $message = trim($_POST['message'] ?? '');
-
-    // Batasi panjang field agar data tersimpan tidak tak terbatas.
-    $name = mb_substr($name, 0, 100);
-    $email = mb_substr($email, 0, 255);
-    $subject = mb_substr($subject, 0, 200);
-    $message = mb_substr($message, 0, 2000);
-
-    if (empty($name) || empty($email) || empty($message)) {
-        $error = 'Please fill in all required fields.';
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $error = 'Please enter a valid email address.';
+    // Honeypot anti-bot: field tersembunyi `website`. Manusia tidak akan
+    // mengisinya; bot yang mengisi diberi respons sukses palsu tanpa data
+    // disimpan.
+    if (trim($_POST['website'] ?? '') !== '') {
+        $success = true;
     } else {
-        // Minimalkan PII: simpan IP hanya sebagai hash, bukan alamat mentah.
-        $ipHash = hash('sha256', ClientIp::get() . 'pixelhop_salt');
+        // CSRF opsional: hanya diverifikasi bila sesi sudah punya token
+        // (mis. user login). Guest tetap bisa mengirim karena form ini publik;
+        // anti-spam utama adalah validasi + honeypot.
+        if (isset($_SESSION['csrf_token'])) {
+            $jsonInput = [];
+            $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+            if (stripos($contentType, 'application/json') !== false) {
+                $jsonInput = json_decode(file_get_contents('php://input'), true) ?: [];
+            }
 
-        $contact = [
-            'name' => $name,
-            'email' => $email,
-            'subject' => $subject,
-            'message' => $message,
-            'ip_hash' => $ipHash,
-            'timestamp' => date('c')
-        ];
+            $submittedToken = $_POST['csrf_token'] ?? $jsonInput['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+            if (!hash_equals($_SESSION['csrf_token'], $submittedToken)) {
+                $error = 'Invalid security token. Please refresh and try again.';
+            }
+        }
 
-        try {
-            $contactsStore = new JsonStore(__DIR__ . '/data/contacts.json');
-            // RMW atomik (flock + tulis via temp file + rename) lewat JsonStore.
-            $contactsStore->mutate(function (array $contacts) use ($contact): array {
-                $contacts[] = $contact;
-                return $contacts;
-            });
-            $success = true;
-        } catch (Throwable $e) {
-            // Jangan bocorkan detail internal ke pengguna; catat ke log saja.
-            error_log('contact.php: failed to store contact message - ' . $e->getMessage());
-            $error = 'Sorry, we could not send your message right now. Please try again later.';
+        if ($error === '') {
+            $name = trim($_POST['name'] ?? '');
+            $email = trim($_POST['email'] ?? '');
+            $subject = trim($_POST['subject'] ?? '');
+            $message = trim($_POST['message'] ?? '');
+
+            // Batasi panjang field agar data tersimpan tidak tak terbatas.
+            $name = mb_substr($name, 0, 100);
+            $email = mb_substr($email, 0, 255);
+            $subject = mb_substr($subject, 0, 200);
+            $message = mb_substr($message, 0, 2000);
+
+            if (empty($name) || empty($email) || empty($message)) {
+                $error = 'Please fill in all required fields.';
+            } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                $error = 'Please enter a valid email address.';
+            } else {
+                // Minimalkan PII: simpan IP hanya sebagai hash, bukan alamat mentah.
+                $ipHash = hash('sha256', ClientIp::get() . 'pixelhop_salt');
+
+                $contact = [
+                    'name' => $name,
+                    'email' => $email,
+                    'subject' => $subject,
+                    'message' => $message,
+                    'ip_hash' => $ipHash,
+                    'timestamp' => date('c')
+                ];
+
+                try {
+                    $contactsStore = new JsonStore(__DIR__ . '/data/contacts.json');
+                    // RMW atomik (flock + tulis via temp file + rename) lewat JsonStore.
+                    $contactsStore->mutate(function (array $contacts) use ($contact): array {
+                        $contacts[] = $contact;
+                        return $contacts;
+                    });
+                    $success = true;
+                } catch (Throwable $e) {
+                    // Jangan bocorkan detail internal ke pengguna; catat ke log saja.
+                    error_log('contact.php: failed to store contact message - ' . $e->getMessage());
+                    $error = 'Sorry, we could not send your message right now. Please try again later.';
+                }
+            }
         }
     }
 }
@@ -196,6 +223,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <?php endif; ?>
 
                 <form method="POST" action="/contact">
+                    <?php if (isset($_SESSION['csrf_token'])): ?>
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+                    <?php endif; ?>
+                    <!-- Honeypot: manusia tidak melihat/mengisi field ini -->
+                    <div style="position:absolute;left:-9999px" aria-hidden="true">
+                        <label for="website">Leave this field empty</label>
+                        <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+                    </div>
+
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div class="form-group">
                             <label class="form-label">Name <span class="text-red-500">*</span></label>

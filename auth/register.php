@@ -9,7 +9,7 @@
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
+header('Access-Control-Allow-Headers: Content-Type, X-CSRF-Token');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
@@ -30,11 +30,13 @@ $input = getInput();
 $email = trim($input['email'] ?? '');
 $password = $input['password'] ?? '';
 $confirmPassword = $input['confirm_password'] ?? '';
-$csrfToken = $input['csrf_token'] ?? '';
+// Accept CSRF token from JSON body, form POST, or X-CSRF-Token header.
+$csrfToken = $input['csrf_token'] ?? $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
 $turnstileToken = $input['cf-turnstile-response'] ?? '';
 
-// Validate CSRF for form submissions
-if (!empty($_POST) && !validateCsrfToken($csrfToken)) {
+// Validate CSRF for ALL POST requests, including JSON submissions.
+$sessionCsrfToken = $_SESSION['csrf_token'] ?? '';
+if ($sessionCsrfToken === '' || $csrfToken === '' || !hash_equals($sessionCsrfToken, $csrfToken)) {
     jsonResponse(false, 'Invalid security token. Please refresh and try again.', 403);
 }
 

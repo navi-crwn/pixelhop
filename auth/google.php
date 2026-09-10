@@ -4,7 +4,7 @@
  * Redirects user to Google for authentication
  */
 
-session_start();
+require_once __DIR__ . '/../includes/bootstrap.php';
 require_once __DIR__ . '/middleware.php';
 
 // Redirect if already authenticated

@@ -18,6 +18,10 @@ $currentUser = getCurrentUser();
 $csrfToken = generateCsrfToken();
 $currentPage = 'gallery';
 
+$imagesFile = __DIR__ . '/../data/images.json';
+require_once __DIR__ . '/../includes/JsonStore.php';
+$store = new JsonStore($imagesFile);
+
 // Handle AJAX requests
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
     header('Content-Type: application/json');
@@ -28,7 +32,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
     }
     
     $action = $_POST['action'] ?? '';
-    $imagesFile = __DIR__ . '/../data/images.json';
     
     // Load storage manager for deletion
     require_once __DIR__ . '/../includes/R2StorageManager.php';
@@ -47,30 +50,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             exit;
         }
         
-        $images = json_decode(file_get_contents($imagesFile), true) ?: [];
         $deleted = 0;
         $freedSpace = 0;
         $storageErrors = [];
         
-        foreach ($imageIds as $imageId) {
-            if (isset($images[$imageId])) {
-                $imgData = $images[$imageId];
-                $freedSpace += $imgData['size'] ?? 0;
-                
-                // Delete from storage (R2 and Contabo)
-                if (!empty($imgData['s3_keys'])) {
-                    $deleteResult = $storageManager->deleteImage($imgData['s3_keys'], $imgData['size'] ?? 0);
-                    if (!$deleteResult['success']) {
-                        $storageErrors[] = $imageId . ': ' . ($deleteResult['error'] ?? 'storage delete failed');
+        $store->mutate(function($images) use ($imageIds, $storageManager, &$deleted, &$freedSpace, &$storageErrors) {
+            foreach ($imageIds as $imageId) {
+                if (isset($images[$imageId])) {
+                    $imgData = $images[$imageId];
+                    $freedSpace += $imgData['size'] ?? 0;
+                    
+                    // Delete from storage (R2 and Contabo)
+                    if (!empty($imgData['s3_keys'])) {
+                        $deleteResult = $storageManager->deleteImage($imgData['s3_keys'], $imgData['size'] ?? 0);
+                        if (!$deleteResult['success']) {
+                            $storageErrors[] = $imageId . ': ' . ($deleteResult['error'] ?? 'storage delete failed');
+                        }
                     }
+                    
+                    unset($images[$imageId]);
+                    $deleted++;
                 }
-                
-                unset($images[$imageId]);
-                $deleted++;
             }
-        }
-        
-        file_put_contents($imagesFile, json_encode($images, JSON_PRETTY_PRINT), LOCK_EX);
+            
+            return $images;
+        });
         
         echo json_encode([
             'success' => true, 
@@ -93,33 +97,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             exit;
         }
         
-        $images = json_decode(file_get_contents($imagesFile), true) ?: [];
         $deleted = 0;
         $freedSpace = 0;
         $storageErrors = [];
         
-        foreach ($images as $id => $img) {
-            $imgUserId = $img['user_id'] ?? null;
-            $isGuest = ($userId === 'guest' && empty($imgUserId));
-            $isMatch = ($imgUserId == $userId);
-            
-            if ($isGuest || $isMatch) {
-                $freedSpace += $img['size'] ?? 0;
+        $store->mutate(function($images) use ($userId, $storageManager, &$deleted, &$freedSpace, &$storageErrors) {
+            foreach ($images as $id => $img) {
+                $imgUserId = $img['user_id'] ?? null;
+                $isGuest = ($userId === 'guest' && empty($imgUserId));
+                $isMatch = ($imgUserId == $userId);
                 
-                // Delete from storage
-                if (!empty($img['s3_keys'])) {
-                    $deleteResult = $storageManager->deleteImage($img['s3_keys'], $img['size'] ?? 0);
-                    if (!$deleteResult['success']) {
-                        $storageErrors[] = $id;
+                if ($isGuest || $isMatch) {
+                    $freedSpace += $img['size'] ?? 0;
+                    
+                    // Delete from storage
+                    if (!empty($img['s3_keys'])) {
+                        $deleteResult = $storageManager->deleteImage($img['s3_keys'], $img['size'] ?? 0);
+                        if (!$deleteResult['success']) {
+                            $storageErrors[] = $id;
+                        }
                     }
+                    
+                    unset($images[$id]);
+                    $deleted++;
                 }
-                
-                unset($images[$id]);
-                $deleted++;
             }
-        }
-        
-        file_put_contents($imagesFile, json_encode($images, JSON_PRETTY_PRINT), LOCK_EX);
+            
+            return $images;
+        });
         
         echo json_encode([
             'success' => true, 
@@ -138,7 +143,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             exit;
         }
         
-        $images = json_decode(file_get_contents($imagesFile), true) ?: [];
+        $images = $store->read();
         $exportData = [];
         
         foreach ($images as $id => $img) {
@@ -177,11 +182,7 @@ $filterDate = $_GET['date'] ?? '';
 $sort = $_GET['sort'] ?? 'newest';
 
 // Load images from JSON
-$imagesFile = __DIR__ . '/../data/images.json';
-$allImages = [];
-if (file_exists($imagesFile)) {
-    $allImages = json_decode(file_get_contents($imagesFile), true) ?: [];
-}
+$allImages = $store->read();
 
 // Get all users for lookup
 $usersStmt = $db->query("SELECT id, email, account_type FROM users");

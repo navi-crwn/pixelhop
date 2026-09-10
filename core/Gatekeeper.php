@@ -11,6 +11,7 @@
  */
 
 require_once __DIR__ . '/../includes/Database.php';
+require_once __DIR__ . '/../includes/ClientIp.php';
 
 class Gatekeeper
 {
@@ -294,11 +295,8 @@ class Gatekeeper
             return $this->deny(self::ERROR_MAINTENANCE, 'System is under maintenance. Please try again later.');
         }
         
-        $ip = $ip ?? ($_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown');
-        if (strpos($ip, ',') !== false) {
-            $ip = trim(explode(',', $ip)[0]);
-        }
-        
+        $ip = $ip ?? ClientIp::get();
+
         // Guest limits - more restrictive
         if ($userId === null) {
             $guestHourlyLimit = (int) ($this->settings['tool_guest_hourly_limit'] ?? 20);
@@ -383,11 +381,8 @@ class Gatekeeper
     public function recordLightToolUsage(string $toolName, ?int $userId = null, int $fileSize = 0, int $processingTimeMs = 0, string $status = 'success'): bool
     {
         try {
-            $ip = $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-            if (strpos($ip, ',') !== false) {
-                $ip = trim(explode(',', $ip)[0]);
-            }
-            
+            $ip = ClientIp::get();
+
             $stmt = $this->db->prepare("
                 INSERT INTO usage_logs (user_id, tool_name, file_size, processing_time_ms, status, ip_address)
                 VALUES (?, ?, ?, ?, ?, ?)

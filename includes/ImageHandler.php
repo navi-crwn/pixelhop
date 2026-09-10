@@ -92,6 +92,8 @@ class ImageHandler
             throw new InvalidArgumentException('Only HTTP/HTTPS URLs are allowed');
         }
 
+        self::assertPublicUrl($url);
+
 
         $headers = $this->getUrlHeaders($url);
 
@@ -137,6 +139,64 @@ class ImageHandler
     }
 
     /**
+     * Validate that a URL does not resolve to a private/internal address (SSRF guard)
+     */
+    public static function assertPublicUrl(string $url): void
+    {
+        $host = parse_url($url, PHP_URL_HOST);
+        if (!$host) {
+            throw new InvalidArgumentException('Invalid URL host');
+        }
+
+        // Strip brackets from IPv6 literals
+        $host = trim($host, '[]');
+
+        // Resolve hostname to IPs (literal IPs pass straight through)
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            $ips = [$host];
+        } else {
+            $records = @dns_get_record($host, DNS_A + DNS_AAAA) ?: [];
+            $ips = [];
+            foreach ($records as $record) {
+                if (!empty($record['ip'])) $ips[] = $record['ip'];
+                if (!empty($record['ipv6'])) $ips[] = $record['ipv6'];
+            }
+            if (empty($ips)) {
+                throw new InvalidArgumentException('Could not resolve URL host');
+            }
+        }
+
+        foreach ($ips as $ip) {
+            if (!self::isPublicIp($ip)) {
+                throw new InvalidArgumentException('URL points to a private or internal address');
+            }
+        }
+    }
+
+    /**
+     * Is the given IP address publicly routable (not private/reserved)?
+     */
+    public static function isPublicIp(string $ip): bool
+    {
+        return $ip !== ''
+            && (bool) filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+    }
+
+    /**
+     * Reject the request if curl actually connected to a private/internal IP.
+     * Closes the redirect-based SSRF gap: assertPublicUrl only vets the initial
+     * host, but CURLOPT_FOLLOWLOCATION may land on an internal address, so we
+     * verify the peer curl really talked to after the transfer.
+     */
+    public static function assertConnectedIpPublic(\CurlHandle $ch): void
+    {
+        $primaryIp = (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP);
+        if ($primaryIp !== '' && !self::isPublicIp($primaryIp)) {
+            throw new InvalidArgumentException('URL resolved to a private or internal address');
+        }
+    }
+
+    /**
      * Get URL headers without downloading body
      */
     private function getUrlHeaders(string $url): array
@@ -148,6 +208,8 @@ class ImageHandler
             CURLOPT_NOBODY => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 5,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_TIMEOUT => 10,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_USERAGENT => 'PixelHop/1.0 (Image Downloader)',
@@ -156,6 +218,9 @@ class ImageHandler
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
+
+        // Guard against redirect-based SSRF (final peer must be public)
+        self::assertConnectedIpPublic($ch);
 
         if ($error) {
             throw new RuntimeException('Failed to fetch URL: ' . $error);
@@ -199,6 +264,8 @@ class ImageHandler
             CURLOPT_FILE => $fp,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 5,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_TIMEOUT => 60,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_USERAGENT => 'PixelHop/1.0 (Image Downloader)',
@@ -214,9 +281,19 @@ class ImageHandler
 
         $success = curl_exec($ch);
         $error = curl_error($ch);
+
+        // Guard against redirect-based SSRF (final peer must be public)
+        $connectedIp = (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP);
         fclose($fp);
 
+        if ($connectedIp !== '' && !self::isPublicIp($connectedIp)) {
+            if (file_exists($destPath)) {
+                unlink($destPath);
+            }
+            throw new InvalidArgumentException('URL resolved to a private or internal address');
+        }
 
+        clearstatcache(true, $destPath);
         if (filesize($destPath) > $maxSize) {
             unlink($destPath);
             throw new InvalidArgumentException('Downloaded file exceeds maximum size');

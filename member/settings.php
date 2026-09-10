@@ -53,6 +53,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                 exit;
             }
 
+            if (strlen($newPassword) > 128) {
+                echo json_encode(['success' => false, 'error' => 'New password is too long']);
+                exit;
+            }
+
+            // Match the complexity policy enforced at registration
+            if (!preg_match('/[A-Z]/', $newPassword) || !preg_match('/[a-z]/', $newPassword) || !preg_match('/[0-9]/', $newPassword)) {
+                echo json_encode(['success' => false, 'error' => 'Password must include an uppercase letter, a lowercase letter, and a number']);
+                exit;
+            }
+
             if ($newPassword !== $confirmPassword) {
                 echo json_encode(['success' => false, 'error' => 'Passwords do not match']);
                 exit;
@@ -83,19 +94,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                 echo json_encode(['success' => false, 'error' => 'Invalid email format']);
                 exit;
             }
+            if (strtolower($newEmail) === strtolower($user['email'])) {
+                echo json_encode(['success' => false, 'error' => 'This is already your email address']);
+                exit;
+            }
             $check = $db->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
             $check->execute([$newEmail, $user['id']]);
             if ($check->fetch()) {
                 echo json_encode(['success' => false, 'error' => 'Email is already in use']);
                 exit;
             }
-            $stmt = $db->prepare("UPDATE users SET email = ?, email_verified = 0, email_verified_at = NULL, verification_token = ? WHERE id = ?");
+
+            // Use the same verification columns the rest of the app relies on
+            // (register.php / verify.php use email_verification_token + _expires)
             $verificationToken = bin2hex(random_bytes(32));
-            $stmt->execute([$newEmail, $verificationToken, $user['id']]);
+            $verificationExpires = date('Y-m-d H:i:s', strtotime('+24 hours'));
+            $stmt = $db->prepare("UPDATE users SET email = ?, email_verified = 0, email_verified_at = NULL, email_verification_token = ?, email_verification_expires = ? WHERE id = ?");
+            $stmt->execute([$newEmail, $verificationToken, $verificationExpires, $user['id']]);
+
+            // Actually send the verification email
+            require_once __DIR__ . '/../includes/Mailer.php';
+            $mailer = new Mailer();
+            $emailSent = $mailer->sendVerificationEmail($newEmail, $verificationToken);
+            if (!$emailSent) {
+                error_log('settings change_email: failed to send verification email to ' . $newEmail);
+            }
 
             $_SESSION['user_email'] = $newEmail;
 
-            echo json_encode(['success' => true, 'message' => 'Email updated. A verification email has been sent to your new address.']);
+            echo json_encode(['success' => true, 'message' => 'Email updated. A verification email has been sent to your new address. Please verify to continue using your account.']);
             break;
 
         case 'request_delete':

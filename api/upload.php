@@ -73,13 +73,10 @@ $config = require __DIR__ . '/../config/s3.php';
 // AbuseGuard check - before processing upload
 require_once __DIR__ . '/../core/AbuseGuard.php';
 require_once __DIR__ . '/../core/SafeGuard.php';
+require_once __DIR__ . '/../includes/ClientIp.php';
 $abuseGuard = new AbuseGuard();
 $safeGuard = new SafeGuard();
-$clientIP = $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-// Handle comma-separated IPs from X-Forwarded-For
-if (strpos($clientIP, ',') !== false) {
-    $clientIP = trim(explode(',', $clientIP)[0]);
-}
+$clientIP = ClientIp::get();
 
 session_start();
 $sessionUserId = $_SESSION['user_id'] ?? null;
@@ -135,19 +132,29 @@ if (!empty($remoteUrl)) {
     
     // Only allow http/https
     $scheme = parse_url($remoteUrl, PHP_URL_SCHEME);
-    if (!in_array($scheme, ['http', 'https'])) {
+    if (!in_array(strtolower((string) $scheme), ['http', 'https'])) {
         jsonResponse(false, 'Only HTTP/HTTPS URLs are allowed');
     }
-    
+
+    // SSRF guard: block URLs resolving to private/internal addresses
+    require_once __DIR__ . '/../includes/ImageHandler.php';
+    try {
+        ImageHandler::assertPublicUrl($remoteUrl);
+    } catch (InvalidArgumentException $e) {
+        jsonResponse(false, $e->getMessage());
+    }
+
     // Fetch the remote image
     $ch = curl_init($remoteUrl);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_MAXREDIRS => 5,
+        CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
         CURLOPT_TIMEOUT => 60,
         CURLOPT_CONNECTTIMEOUT => 15,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_USERAGENT => 'PixelHop/1.0 Image Fetcher',
         CURLOPT_HTTPHEADER => ['Accept: image/*'],
     ]);
@@ -155,8 +162,15 @@ if (!empty($remoteUrl)) {
     $imageData = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+    $connectedIp = (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP);
     $curlError = curl_error($ch);
-    
+
+    // SSRF guard: reject if a redirect landed on a private/internal address
+    if ($connectedIp !== '' && !ImageHandler::isPublicIp($connectedIp)) {
+        uploadDebug('remote_ssrf_block', ['ip' => $connectedIp, 'url' => $remoteUrl]);
+        jsonResponse(false, 'URL resolved to a private or internal address');
+    }
+
     if ($curlError) {
         uploadDebug('remote_fetch_error', ['error' => $curlError, 'url' => $remoteUrl]);
         jsonResponse(false, 'Failed to fetch image: ' . $curlError);
@@ -183,7 +197,7 @@ if (!empty($remoteUrl)) {
     
     // Extract filename from URL
     $urlPath = parse_url($remoteUrl, PHP_URL_PATH);
-    $originalName = basename($urlPath) ?: 'image.jpg';
+    $originalName = $urlPath ? (basename($urlPath) ?: 'image.jpg') : 'image.jpg';
     
     // Create pseudo $_FILES array
     $file = [
@@ -304,6 +318,11 @@ if ($duplicateImage) {
     // Fallback to stored urls if s3_keys not available
     if (empty($dupProxyUrls)) {
         $dupProxyUrls = $duplicateImage['urls'] ?? [];
+    }
+
+    // Clean up remote temp file before responding
+    if ($tempFilePath && file_exists($tempFilePath)) {
+        @unlink($tempFilePath);
     }
 
     jsonResponse(true, null, 200, [
@@ -451,7 +470,7 @@ try {
         'storage_providers' => $storageProviders, // Track R2 vs Contabo per size
         'created_at' => $timestamp,
         'delete_at' => $deleteAt,
-        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+        'ip' => $clientIP,
     ];
 
     saveImageData($imageId, $imageData);
@@ -904,15 +923,31 @@ function saveImageData($imageId, $data) {
         mkdir($dataDir, 0755, true);
     }
 
-    $images = [];
-    if (file_exists($dataFile)) {
-        $content = file_get_contents($dataFile);
-        $images = json_decode($content, true) ?: [];
+    // Atomic read-modify-write under an exclusive lock so concurrent
+    // uploads don't clobber each other's entries
+    $fp = fopen($dataFile, 'c+');
+    if (!$fp) {
+        error_log('saveImageData: cannot open ' . $dataFile);
+        return;
     }
+
+    if (!flock($fp, LOCK_EX)) {
+        fclose($fp);
+        error_log('saveImageData: cannot lock ' . $dataFile);
+        return;
+    }
+
+    $content = stream_get_contents($fp);
+    $images = json_decode($content, true) ?: [];
 
     $images[$imageId] = $data;
 
-    file_put_contents($dataFile, json_encode($images, JSON_PRETTY_PRINT));
+    rewind($fp);
+    ftruncate($fp, 0);
+    fwrite($fp, json_encode($images, JSON_PRETTY_PRINT));
+    fflush($fp);
+    flock($fp, LOCK_UN);
+    fclose($fp);
 }
 
 /**

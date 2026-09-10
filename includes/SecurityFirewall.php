@@ -218,18 +218,8 @@ class SecurityFirewall
      */
     private function getClientIP(): string
     {
-        // Cloudflare real IP
-        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
-            return $_SERVER['HTTP_CF_CONNECTING_IP'];
-        }
-        
-        // Proxy forwarded IP
-        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-            return trim($ips[0]);
-        }
-        
-        return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+        require_once __DIR__ . '/ClientIp.php';
+        return ClientIp::get();
     }
     
     /**

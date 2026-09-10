@@ -9,20 +9,54 @@
  * 3. Add widget to forms with renderTurnstile()
  */
 
+require_once __DIR__ . '/ClientIp.php';
+
 class Turnstile
 {
-
-    private const SITE_KEY = '0x4AAAAAACBnzcL1eQCSq5rP';
-    private const SECRET_KEY = '0x4AAAAAACBnzed3OOscJhHnMYIP-iKqmuI';
     private const VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+
+    /** @var array{site_key:string,secret_key:string}|null */
+    private static ?array $config = null;
+
+    /**
+     * Load keys from config/turnstile.php, falling back to the
+     * TURNSTILE_SITE_KEY / TURNSTILE_SECRET_KEY environment variables.
+     * Keys are never hardcoded in source.
+     */
+    private static function config(): array
+    {
+        if (self::$config === null) {
+            $configFile = __DIR__ . '/../config/turnstile.php';
+            $loaded = is_file($configFile) ? require $configFile : [];
+
+            self::$config = [
+                'site_key'   => $loaded['site_key']   ?? getenv('TURNSTILE_SITE_KEY')   ?: '',
+                'secret_key' => $loaded['secret_key'] ?? getenv('TURNSTILE_SECRET_KEY') ?: '',
+            ];
+        }
+
+        return self::$config;
+    }
+
+    private static function siteKey(): string
+    {
+        return self::config()['site_key'];
+    }
+
+    private static function secretKey(): string
+    {
+        return self::config()['secret_key'];
+    }
 
     /**
      * Check if Turnstile is configured
      */
     public static function isConfigured(): bool
     {
-        return self::SITE_KEY !== 'YOUR_SITE_KEY_HERE'
-            && self::SECRET_KEY !== 'YOUR_SECRET_KEY_HERE';
+        $c = self::config();
+        return !empty($c['site_key']) && !empty($c['secret_key'])
+            && $c['site_key'] !== 'YOUR_SITE_KEY_HERE'
+            && $c['secret_key'] !== 'YOUR_SECRET_KEY_HERE';
     }
 
     /**
@@ -55,7 +89,7 @@ class Turnstile
 
 
         $data = [
-            'secret' => self::SECRET_KEY,
+            'secret' => self::secretKey(),
             'response' => $token,
             'remoteip' => $ip,
         ];
@@ -129,7 +163,7 @@ class Turnstile
                 }
             })();
             </script>',
-            htmlspecialchars(self::SITE_KEY),
+            htmlspecialchars(self::siteKey()),
             htmlspecialchars($theme)
         );
     }
@@ -151,7 +185,7 @@ class Turnstile
      */
     public static function getSiteKey(): string
     {
-        return self::isConfigured() ? self::SITE_KEY : '';
+        return self::isConfigured() ? self::siteKey() : '';
     }
 
     /**
@@ -159,19 +193,6 @@ class Turnstile
      */
     private static function getClientIp(): string
     {
-        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
-            return $_SERVER['HTTP_CF_CONNECTING_IP'];
-        }
-
-        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-            return trim($ips[0]);
-        }
-
-        if (!empty($_SERVER['HTTP_X_REAL_IP'])) {
-            return $_SERVER['HTTP_X_REAL_IP'];
-        }
-
-        return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+        return ClientIp::get();
     }
 }

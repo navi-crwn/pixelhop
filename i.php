@@ -14,8 +14,10 @@ $requestUri = $_SERVER['REQUEST_URI'];
 $imagePath = preg_replace('#^/i/#', '', $requestUri);
 
 // Security: validate path format (only allow safe characters)
-// Format: YYYY/MM/DD/imageId_size.ext where size can be original, large, medium, thumb
-if (!preg_match('#^[\d]{4}/[\d]{2}/[\d]{2}/([a-zA-Z0-9]+)_(original|large|medium|thumb)\.(jpg|jpeg|png|gif|webp)$#', $imagePath, $matches)) {
+// Format: YYYY/MM/DD/imageId_size.ext 
+// imageId can be: simple code (abc123) or slug_code (rumah-baru_abc123)
+// Size variants: original, large, medium, thumb
+if (!preg_match('#^[\d]{4}/[\d]{2}/[\d]{2}/([a-zA-Z0-9_\-]+)_(original|large|medium|thumb)\.(jpg|jpeg|png|gif|webp)$#', $imagePath, $matches)) {
     http_response_code(404);
     header('Content-Type: text/plain');
     echo 'Image not found';
@@ -71,6 +73,7 @@ $contentLength = strlen($body);
 
 // Send headers
 http_response_code(200);
+header("Access-Control-Allow-Origin: *");
 header('Content-Type: ' . $contentType);
 header('Content-Length: ' . $contentLength);
 header('Cache-Control: public, max-age=31536000, immutable');

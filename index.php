@@ -301,10 +301,16 @@ $isAdmin = $isLoggedIn && isAdmin();
                         A Hop Away
                     </span>
                 </h1>
-                <p class="text-lg md:text-xl max-w-2xl mx-auto" style="color: var(--color-text-secondary);">
+                <p class="text-lg md:text-xl max-w-2xl mx-auto mb-4" style="color: var(--color-text-secondary);">
                     Free premium image hosting with powerful tools.
                     Upload, compress, resize, and share your images instantly.
                 </p>
+                
+                <!-- AI Safety Badge -->
+                <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full" style="background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.3);">
+                    <i data-lucide="shield-check" class="w-4 h-4 text-green-400"></i>
+                    <span class="text-sm" style="color: var(--color-text-secondary);">Protected by <strong class="text-green-400">AI-Powered Security</strong></span>
+                </div>
             </section>
 
             <!-- Main Stage Container -->

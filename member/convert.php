@@ -103,11 +103,29 @@ $csrfToken = generateCsrfToken();
         [data-theme="light"] .header { border-color: rgba(0, 0, 0, 0.08); }
         [data-theme="light"] .nav-link { color: rgba(0, 0, 0, 0.6); }
         [data-theme="light"] .nav-link:hover { background: rgba(0, 0, 0, 0.05); color: #1a202c; }
-        [data-theme="light"] .upload-area { border-color: rgba(0, 0, 0, 0.15); background: rgba(0, 0, 0, 0.02); }
-        [data-theme="light"] .upload-area:hover { border-color: #0891b2; background: rgba(8, 145, 178, 0.05); }
+        [data-theme="light"] .upload-box { border-color: rgba(0, 0, 0, 0.15); background: rgba(0, 0, 0, 0.02); }
+        [data-theme="light"] .upload-box:hover { border-color: #22c55e; background: rgba(34, 197, 94, 0.05); }
         [data-theme="light"] .text-white\/50, [data-theme="light"] .file-size, [data-theme="light"] .empty-state { color: rgba(0, 0, 0, 0.5) !important; }
+        [data-theme="light"] .text-white\/70 { color: rgba(0, 0, 0, 0.7) !important; }
         [data-theme="light"] .options-panel, [data-theme="light"] .file-item { background: rgba(0, 0, 0, 0.03); border-color: rgba(0, 0, 0, 0.08); }
+        [data-theme="light"] .option-label { color: #1a202c !important; }
+        [data-theme="light"] .format-btn { background: rgba(0, 0, 0, 0.05); color: #1a202c; border-color: rgba(0, 0, 0, 0.15); }
+        [data-theme="light"] .format-btn:hover { background: rgba(34, 197, 94, 0.1); color: #16a34a; border-color: rgba(34, 197, 94, 0.3); }
+        [data-theme="light"] .format-btn.active { background: rgba(34, 197, 94, 0.15); color: #16a34a; border-color: #22c55e; }
+        [data-theme="light"] .url-input { background: rgba(0, 0, 0, 0.03); border-color: rgba(0, 0, 0, 0.1); color: #1a202c; }
+        [data-theme="light"] .url-input::placeholder { color: rgba(0, 0, 0, 0.4); }
+        [data-theme="light"] .add-url-btn { background: rgba(34, 197, 94, 0.1); color: #16a34a; border-color: rgba(34, 197, 94, 0.3); }
         [data-theme="light"] .btn-secondary { background: rgba(0, 0, 0, 0.05); color: rgba(0, 0, 0, 0.7); }
+        
+        /* Theme Toggle */
+        .theme-toggle-btn { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.6); cursor: pointer; transition: all 0.2s; }
+        .theme-toggle-btn:hover { background: rgba(255, 255, 255, 0.1); color: #22d3ee; }
+        [data-theme="light"] .theme-toggle-btn { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.1); color: rgba(0, 0, 0, 0.6); }
+        [data-theme="light"] .theme-toggle-btn:hover { background: rgba(0, 0, 0, 0.1); color: #0891b2; }
+        #theme-icon-light { display: none; }
+        #theme-icon-dark { display: block; }
+        [data-theme="light"] #theme-icon-light { display: block; }
+        [data-theme="light"] #theme-icon-dark { display: none; }
     </style>
 </head>
 <body>
@@ -123,6 +141,10 @@ $csrfToken = generateCsrfToken();
             <div class="nav-links">
                 <a href="/member/tools" class="nav-link"><i data-lucide="arrow-left" class="w-4 h-4"></i> Back</a>
                 <a href="/dashboard" class="nav-link"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Dashboard</a>
+                <button class="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Theme">
+                    <i data-lucide="sun" id="theme-icon-light" class="w-4 h-4"></i>
+                    <i data-lucide="moon" id="theme-icon-dark" class="w-4 h-4"></i>
+                </button>
             </div>
         </div>
 
@@ -300,6 +322,16 @@ $csrfToken = generateCsrfToken();
             sessionStorage.setItem('toolResults', JSON.stringify(results));
             window.location.href = '/member/result.php?type=tool&tool=convert&count=' + results.filter(r => r.success).length;
         });
+        
+        // Theme Toggle
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme') || 'dark';
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('pixelhop-theme', next);
+            lucide.createIcons();
+        }
     </script>
 </body>
 </html>

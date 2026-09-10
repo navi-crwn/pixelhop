@@ -351,6 +351,63 @@ $csrfToken = generateCsrfToken();
             .nav-links { display: none; }
             .url-input-group { flex-direction: column; }
         }
+
+        /* Light theme styles */
+        [data-theme="light"] .container {
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.1);
+        }
+        [data-theme="light"] .header {
+            border-color: rgba(0, 0, 0, 0.08);
+        }
+        [data-theme="light"] .text-white, [data-theme="light"] h1, 
+        [data-theme="light"] .dropzone-text { 
+            color: #1a202c !important; 
+        }
+        [data-theme="light"] .text-white\/50, [data-theme="light"] .dropzone-hint,
+        [data-theme="light"] .url-hint { 
+            color: rgba(0, 0, 0, 0.5) !important; 
+        }
+        [data-theme="light"] .nav-link { color: rgba(0, 0, 0, 0.6); }
+        [data-theme="light"] .nav-link:hover { background: rgba(0, 0, 0, 0.05); color: #1a202c; }
+        [data-theme="light"] .nav-link.active { background: rgba(34, 211, 238, 0.15); color: #0891b2; }
+        [data-theme="light"] .upload-tab {
+            background: rgba(0, 0, 0, 0.03);
+            border-color: rgba(0, 0, 0, 0.08);
+            color: rgba(0, 0, 0, 0.6);
+        }
+        [data-theme="light"] .upload-tab:hover {
+            background: rgba(0, 0, 0, 0.06);
+            color: #1a202c;
+        }
+        [data-theme="light"] .upload-tab.active {
+            background: rgba(34, 211, 238, 0.15);
+            border-color: rgba(34, 211, 238, 0.3);
+            color: #0891b2;
+        }
+        [data-theme="light"] .dropzone {
+            border-color: rgba(0, 0, 0, 0.15);
+            background: rgba(0, 0, 0, 0.02);
+        }
+        [data-theme="light"] .dropzone:hover, [data-theme="light"] .dropzone.dragover {
+            border-color: #0891b2;
+            background: rgba(8, 145, 178, 0.05);
+        }
+        [data-theme="light"] .preview-item {
+            background: rgba(0, 0, 0, 0.05);
+        }
+        [data-theme="light"] .progress-bar {
+            background: rgba(0, 0, 0, 0.1);
+        }
+        
+        /* Theme Toggle */
+        .theme-toggle-btn { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.6); cursor: pointer; transition: all 0.2s; }
+        .theme-toggle-btn:hover { background: rgba(255, 255, 255, 0.1); color: #22d3ee; }
+        [data-theme="light"] .theme-toggle-btn { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.1); color: rgba(0, 0, 0, 0.6); }
+        [data-theme="light"] .theme-toggle-btn:hover { background: rgba(0, 0, 0, 0.1); color: #0891b2; }
+        #theme-icon-light { display: none; }
+        #theme-icon-dark { display: block; }
+        [data-theme="light"] #theme-icon-light { display: block; }
+        [data-theme="light"] #theme-icon-dark { display: none; }
     </style>
 </head>
 <body>
@@ -379,6 +436,10 @@ $csrfToken = generateCsrfToken();
                     <i data-lucide="wrench" class="w-4 h-4"></i>
                     Tools
                 </a>
+                <button class="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Theme">
+                    <i data-lucide="sun" id="theme-icon-light" class="w-4 h-4"></i>
+                    <i data-lucide="moon" id="theme-icon-dark" class="w-4 h-4"></i>
+                </button>
             </div>
         </div>
 
@@ -650,6 +711,16 @@ https://example.com/image2.png"></textarea>
                 }
             }
         });
+        
+        // Theme Toggle
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme') || 'dark';
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('pixelhop-theme', next);
+            lucide.createIcons();
+        }
     </script>
 </body>
 </html>

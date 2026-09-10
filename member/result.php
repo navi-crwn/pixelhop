@@ -106,6 +106,15 @@ $csrfToken = generateCsrfToken();
             border-color: var(--neon-cyan);
         }
 
+        /* Temporary notice styling */
+        .temp-notice {
+            background: rgba(251, 191, 36, 0.1);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+        }
+        .temp-notice-text {
+            color: var(--color-text-secondary);
+        }
+
         /* Upload Result - Accordion Style */
         .thumbnail-strip {
             display: flex;
@@ -463,9 +472,42 @@ $csrfToken = generateCsrfToken();
             color: #fff;
         }
         .toast.show { transform: translateY(0); opacity: 1; }
+        
+        /* Theme Toggle */
+        .theme-toggle-btn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--color-text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+            z-index: 100;
+        }
+        .theme-toggle-btn:hover {
+            background: var(--glass-bg-hover);
+            color: var(--color-neon-cyan);
+        }
+        #theme-icon-light { display: none; }
+        #theme-icon-dark { display: block; }
+        [data-theme="light"] #theme-icon-light { display: block; }
+        [data-theme="light"] #theme-icon-dark { display: none; }
     </style>
 </head>
 <body>
+    <!-- Theme Toggle Button -->
+    <button class="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Theme">
+        <i data-lucide="sun" id="theme-icon-light" class="w-5 h-5"></i>
+        <i data-lucide="moon" id="theme-icon-dark" class="w-5 h-5"></i>
+    </button>
+
     <div class="result-container">
         <!-- Header -->
         <div class="result-header">
@@ -483,10 +525,10 @@ $csrfToken = generateCsrfToken();
         
         <?php if ($isToolResult): ?>
         <!-- Temp Storage Notice -->
-        <div class="mb-6 p-4 rounded-lg" style="background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3);">
+        <div class="mb-6 p-4 rounded-lg temp-notice">
             <div class="flex items-start gap-3">
                 <i data-lucide="clock" class="w-5 h-5 mt-0.5 flex-shrink-0" style="color: #fbbf24;"></i>
-                <div class="text-sm" style="color: rgba(255,255,255,0.8);">
+                <div class="text-sm temp-notice-text">
                     <strong style="color: #fbbf24;">⏰ Expires in 6 hours:</strong> 
                     These results are temporary and will be <strong>automatically deleted</strong>. 
                     Download your images now to keep them.
@@ -530,6 +572,16 @@ $csrfToken = generateCsrfToken();
 
     <script>
         lucide.createIcons();
+        
+        // Theme Toggle Function
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('pixelhop-theme', newTheme);
+            lucide.createIcons();
+        }
 
         const isToolResult = <?= $isToolResult ? 'true' : 'false' ?>;
         const container = document.getElementById('resultsContainer');

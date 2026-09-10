@@ -439,11 +439,55 @@ $csrfToken = generateCsrfToken();
         [data-theme="light"] .option-hint {
             color: rgba(0, 0, 0, 0.5);
         }
+        
+        [data-theme="light"] .option-label {
+            color: #1a202c;
+        }
+        
+        [data-theme="light"] .quality-slider {
+            background: rgba(0, 0, 0, 0.1);
+        }
+        
+        [data-theme="light"] .quality-value {
+            color: #0891b2;
+        }
+        
+        [data-theme="light"] .add-url-btn {
+            background: rgba(8, 145, 178, 0.1);
+            color: #0891b2;
+            border-color: rgba(8, 145, 178, 0.3);
+        }
+        
+        [data-theme="light"] .text-white\/70 {
+            color: rgba(0, 0, 0, 0.7) !important;
+        }
 
         [data-theme="light"] .btn-secondary {
             background: rgba(0, 0, 0, 0.05);
             color: rgba(0, 0, 0, 0.7);
         }
+        
+        /* Theme Toggle */
+        .theme-toggle-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.6);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .theme-toggle-btn:hover { background: rgba(255, 255, 255, 0.1); color: #22d3ee; }
+        [data-theme="light"] .theme-toggle-btn { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.1); color: rgba(0, 0, 0, 0.6); }
+        [data-theme="light"] .theme-toggle-btn:hover { background: rgba(0, 0, 0, 0.1); color: #0891b2; }
+        #theme-icon-light { display: none; }
+        #theme-icon-dark { display: block; }
+        [data-theme="light"] #theme-icon-light { display: block; }
+        [data-theme="light"] #theme-icon-dark { display: none; }
     </style>
 </head>
 <body>
@@ -468,6 +512,10 @@ $csrfToken = generateCsrfToken();
                     <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
                     Dashboard
                 </a>
+                <button class="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Theme">
+                    <i data-lucide="sun" id="theme-icon-light" class="w-4 h-4"></i>
+                    <i data-lucide="moon" id="theme-icon-dark" class="w-4 h-4"></i>
+                </button>
             </div>
         </div>
 
@@ -526,6 +574,16 @@ $csrfToken = generateCsrfToken();
 
     <script>
         lucide.createIcons();
+        
+        // Theme Toggle Function
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('pixelhop-theme', newTheme);
+            lucide.createIcons();
+        }
 
         const dropzone = document.getElementById('dropzone');
         const fileInput = document.getElementById('fileInput');

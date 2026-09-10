@@ -98,14 +98,33 @@ $siteName = $config['site']['name'];
                     <li>Improve our Service through analytics</li>
                 </ul>
 
-                <h2>3. Abuse Prevention</h2>
-                <p>To maintain service quality, we implement automated abuse prevention:</p>
+                <h2>3. Abuse Prevention & AI Content Moderation</h2>
+                <p>To maintain service quality and platform safety, we implement comprehensive protection measures:</p>
+                
+                <h3>Automated Rate Limiting</h3>
                 <ul>
                     <li>Rate limiting based on IP address</li>
                     <li>Automatic blocking of suspicious activity</li>
                     <li>Monitoring upload patterns for abuse detection</li>
                 </ul>
-                <p>This data is used solely for security purposes and is not shared with third parties.</p>
+                
+                <h3>AI-Powered Content Scanning</h3>
+                <p>All uploaded images are automatically scanned using AI and industry-standard safety tools to detect:</p>
+                <ul>
+                    <li>Child Sexual Abuse Material (CSAM)</li>
+                    <li>Adult/sexually explicit content</li>
+                    <li>Violence and gore</li>
+                    <li>Hate symbols and extremist content</li>
+                    <li>Malware and malicious content</li>
+                </ul>
+                
+                <div class="p-4 rounded-lg mb-4" style="background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3);">
+                    <p class="flex items-center gap-2" style="color: rgb(34, 197, 94); margin-bottom: 0;">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                        <strong>AI-Powered Security</strong>
+                    </p>
+                    <p class="text-sm mt-2" style="margin-bottom: 0;">Our moderation system uses Google Safe Browsing, VirusTotal, and Gemini AI Flash to provide real-time protection. This data is used solely for security purposes and is not shared with third parties except when required by law.</p>
+                </div>
 
                 <h2>4. Data Storage</h2>
                 <p>Images are stored on secure cloud infrastructure. We implement industry-standard security measures to protect your data.</p>

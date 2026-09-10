@@ -162,13 +162,14 @@ $hasPendingDeletion = !empty($user['delete_requested_at']);
         
         .dashboard-container {
             width: 100%;
-            max-width: 600px;
+            max-width: 1000px;
             background: rgba(20, 20, 35, 0.85);
             backdrop-filter: blur(20px);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 24px;
             padding: 32px;
             box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5);
+            margin: 0 auto;
         }
         
         .header {
@@ -178,6 +179,8 @@ $hasPendingDeletion = !empty($user['delete_requested_at']);
             margin-bottom: 28px;
             padding-bottom: 20px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            flex-wrap: wrap;
+            gap: 16px;
         }
         
         .user-section { display: flex; align-items: center; gap: 14px; }
@@ -281,15 +284,30 @@ $hasPendingDeletion = !empty($user['delete_requested_at']);
         /* Light theme */
         [data-theme="light"] body { background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 50%, #f0f4f8 100%); }
         [data-theme="light"] .dashboard-container { background: rgba(255, 255, 255, 0.9); border-color: rgba(0, 0, 0, 0.1); box-shadow: 0 25px 80px rgba(0, 0, 0, 0.1); }
-        [data-theme="light"] .text-white, [data-theme="light"] h1, [data-theme="light"] h2, [data-theme="light"] .section-title, [data-theme="light"] label { color: #1a202c !important; }
+        [data-theme="light"] .text-white, [data-theme="light"] h1, [data-theme="light"] h2, [data-theme="light"] .section-title, [data-theme="light"] label,
+        [data-theme="light"] .user-info h1, [data-theme="light"] .stat-value, [data-theme="light"] .form-input { color: #1a202c !important; }
         [data-theme="light"] .header { border-color: rgba(0, 0, 0, 0.08); }
         [data-theme="light"] .nav-link { color: rgba(0, 0, 0, 0.6); }
         [data-theme="light"] .nav-link:hover { background: rgba(0, 0, 0, 0.05); color: #1a202c; }
         [data-theme="light"] .nav-link.active { background: rgba(34, 211, 238, 0.15); color: #0891b2; }
-        [data-theme="light"] .text-white\/50, [data-theme="light"] .user-info p { color: rgba(0, 0, 0, 0.5) !important; }
-        [data-theme="light"] .settings-card, [data-theme="light"] .stat-card { background: rgba(0, 0, 0, 0.03); border-color: rgba(0, 0, 0, 0.08); }
-        [data-theme="light"] .settings-input, [data-theme="light"] .settings-select { background: rgba(0, 0, 0, 0.03); border-color: rgba(0, 0, 0, 0.1); color: #1a202c; }
+        [data-theme="light"] .text-white\/50, [data-theme="light"] .user-info p, [data-theme="light"] .stat-label, 
+        [data-theme="light"] .form-label { color: rgba(0, 0, 0, 0.5) !important; }
+        [data-theme="light"] .settings-card, [data-theme="light"] .stat-card, [data-theme="light"] .card { background: rgba(0, 0, 0, 0.03); border-color: rgba(0, 0, 0, 0.08); }
+        [data-theme="light"] .settings-input, [data-theme="light"] .settings-select, [data-theme="light"] .form-input { 
+            background: rgba(0, 0, 0, 0.03); border-color: rgba(0, 0, 0, 0.1); color: #1a202c; 
+        }
         [data-theme="light"] .btn-secondary { background: rgba(0, 0, 0, 0.05); color: rgba(0, 0, 0, 0.7); border-color: rgba(0, 0, 0, 0.1); }
+        [data-theme="light"] .warning-box { background: rgba(234, 179, 8, 0.1); }
+        
+        /* Theme Toggle */
+        .theme-toggle-btn { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.6); cursor: pointer; transition: all 0.2s; }
+        .theme-toggle-btn:hover { background: rgba(255, 255, 255, 0.1); color: #22d3ee; }
+        [data-theme="light"] .theme-toggle-btn { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.1); color: rgba(0, 0, 0, 0.6); }
+        [data-theme="light"] .theme-toggle-btn:hover { background: rgba(0, 0, 0, 0.1); color: #0891b2; }
+        #theme-icon-light { display: none; }
+        #theme-icon-dark { display: block; }
+        [data-theme="light"] #theme-icon-light { display: block; }
+        [data-theme="light"] #theme-icon-dark { display: none; }
     </style>
 </head>
 <body>
@@ -304,7 +322,13 @@ $hasPendingDeletion = !empty($user['delete_requested_at']);
             </div>
             <div class="nav-links">
                 <a href="/dashboard" class="nav-link"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Dashboard</a>
+                <a href="/gallery" class="nav-link"><i data-lucide="images" class="w-4 h-4"></i> Gallery</a>
+                <a href="/member/tools" class="nav-link"><i data-lucide="wrench" class="w-4 h-4"></i> Tools</a>
                 <a href="/member/settings" class="nav-link active"><i data-lucide="settings" class="w-4 h-4"></i> Settings</a>
+                <button class="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Theme">
+                    <i data-lucide="sun" id="theme-icon-light" class="w-4 h-4"></i>
+                    <i data-lucide="moon" id="theme-icon-dark" class="w-4 h-4"></i>
+                </button>
                 <a href="/auth/logout" class="nav-link" style="color: #ef4444;"><i data-lucide="log-out" class="w-4 h-4"></i></a>
             </div>
         </div>
@@ -468,6 +492,16 @@ $hasPendingDeletion = !empty($user['delete_requested_at']);
         };
         <?php endif; ?>
         <?php endif; ?>
+        
+        // Theme Toggle
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme') || 'dark';
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('pixelhop-theme', next);
+            lucide.createIcons();
+        }
     </script>
 </body>
 </html>

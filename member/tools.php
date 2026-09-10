@@ -447,6 +447,15 @@ $tools = [
             background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(249, 115, 22, 0.15));
             border-color: rgba(245, 158, 11, 0.3);
         }
+        
+        /* Storage Notice Light Theme */
+        .storage-text { color: rgba(255,255,255,0.8); }
+        .storage-title { color: #22d3ee; }
+        .storage-link { color: #22d3ee; }
+        [data-theme="light"] .storage-notice { background: rgba(8, 145, 178, 0.08) !important; border-color: rgba(8, 145, 178, 0.25) !important; }
+        [data-theme="light"] .storage-text { color: #334155 !important; }
+        [data-theme="light"] .storage-title { color: #0891b2 !important; }
+        [data-theme="light"] .storage-link { color: #0891b2 !important; }
 
         /* Theme Toggle Button */
         .theme-toggle-btn {
@@ -479,11 +488,11 @@ $tools = [
             color: #0891b2;
         }
 
-        #theme-icon-light { display: none; }
-        #theme-icon-dark { display: block; }
+        #theme-icon-light, #theme-icon-light-nav { display: none; }
+        #theme-icon-dark, #theme-icon-dark-nav { display: block; }
 
-        [data-theme="light"] #theme-icon-light { display: block; }
-        [data-theme="light"] #theme-icon-dark { display: none; }
+        [data-theme="light"] #theme-icon-light, [data-theme="light"] #theme-icon-light-nav { display: block; }
+        [data-theme="light"] #theme-icon-dark, [data-theme="light"] #theme-icon-dark-nav { display: none; }
 
         .footer-bar {
             margin-top: 24px;
@@ -570,9 +579,16 @@ $tools = [
                     <i data-lucide="wrench" class="w-4 h-4"></i>
                     Tools
                 </a>
-                <a href="/member/upload" class="nav-link">
-                    <i data-lucide="upload" class="w-4 h-4"></i>
-                    Upload
+                <a href="/member/settings" class="nav-link">
+                    <i data-lucide="settings" class="w-4 h-4"></i>
+                    Settings
+                </a>
+                <button onclick="toggleTheme()" class="theme-toggle-btn" title="Toggle theme">
+                    <i data-lucide="sun" class="w-4 h-4" id="theme-icon-light-nav"></i>
+                    <i data-lucide="moon" class="w-4 h-4" id="theme-icon-dark-nav"></i>
+                </button>
+                <a href="/auth/logout" class="nav-link" style="color: #ef4444;">
+                    <i data-lucide="log-out" class="w-4 h-4"></i>
                 </a>
             </div>
         </div>
@@ -623,14 +639,14 @@ $tools = [
         </div>
         
         <!-- Info Notice -->
-        <div class="mb-6 p-4 rounded-lg" style="background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3);">
+        <div class="storage-notice mb-6 p-4 rounded-lg" style="background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3);">
             <div class="flex items-start gap-3">
                 <i data-lucide="info" class="w-5 h-5 mt-0.5 flex-shrink-0" style="color: #22d3ee;"></i>
-                <div class="text-sm" style="color: rgba(255,255,255,0.8);">
-                    <strong style="color: #22d3ee;">Temporary Storage:</strong> 
+                <div class="text-sm storage-text">
+                    <strong class="storage-title">Temporary Storage:</strong> 
                     Tool results are stored for <strong>6 hours</strong> then auto-deleted. 
                     Download your processed images before they expire. 
-                    To save permanently, use the <a href="/member/upload" class="underline" style="color: #22d3ee;">Upload</a> feature.
+                    To save permanently, use the <a href="/member/upload" class="underline storage-link">Upload</a> feature.
                 </div>
             </div>
         </div>

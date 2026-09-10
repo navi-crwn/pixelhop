@@ -64,8 +64,24 @@ $csrfToken = generateCsrfToken();
 
     <!-- Custom Styles -->
     <link rel="stylesheet" href="/assets/css/glass.css?v=1.1.0">
+    <style>
+        .theme-toggle-btn { position: fixed; top: 20px; right: 20px; width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.15); color: rgba(255, 255, 255, 0.7); cursor: pointer; transition: all 0.2s; z-index: 100; }
+        .theme-toggle-btn:hover { background: rgba(255, 255, 255, 0.15); color: #a855f7; }
+        [data-theme="light"] .theme-toggle-btn { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.1); color: rgba(0, 0, 0, 0.6); }
+        [data-theme="light"] .theme-toggle-btn:hover { background: rgba(0, 0, 0, 0.1); color: #7c3aed; }
+        #theme-icon-light { display: none; }
+        #theme-icon-dark { display: block; }
+        [data-theme="light"] #theme-icon-light { display: block; }
+        [data-theme="light"] #theme-icon-dark { display: none; }
+    </style>
 </head>
 <body class="min-h-screen font-sans overflow-x-hidden">
+
+    <!-- Theme Toggle Button -->
+    <button class="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Theme">
+        <i data-lucide="sun" id="theme-icon-light" class="w-5 h-5"></i>
+        <i data-lucide="moon" id="theme-icon-dark" class="w-5 h-5"></i>
+    </button>
 
     <!-- Animated Background -->
     <div id="bg-container" class="fixed inset-0 overflow-hidden pointer-events-none z-0">
@@ -436,6 +452,16 @@ $csrfToken = generateCsrfToken();
                 notification.style.opacity = '0';
                 setTimeout(() => notification.remove(), 300);
             }, 4000);
+        }
+        
+        // Theme Toggle
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme') || 'dark';
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('pixelhop-theme', next);
+            lucide.createIcons();
         }
     </script>
 </body>

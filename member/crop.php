@@ -73,11 +73,22 @@ $csrfToken = generateCsrfToken();
         [data-theme="light"] .header { border-color: rgba(0, 0, 0, 0.08); }
         [data-theme="light"] .nav-link { color: rgba(0, 0, 0, 0.6); }
         [data-theme="light"] .nav-link:hover { background: rgba(0, 0, 0, 0.05); color: #1a202c; }
-        [data-theme="light"] .upload-area { border-color: rgba(0, 0, 0, 0.15); background: rgba(0, 0, 0, 0.02); }
-        [data-theme="light"] .upload-area:hover { border-color: #0891b2; background: rgba(8, 145, 178, 0.05); }
+        [data-theme="light"] .upload-box { border-color: rgba(0, 0, 0, 0.15); background: rgba(0, 0, 0, 0.02); }
+        [data-theme="light"] .upload-box:hover { border-color: #ec4899; background: rgba(236, 72, 153, 0.05); }
         [data-theme="light"] .text-white\/50 { color: rgba(0, 0, 0, 0.5) !important; }
+        [data-theme="light"] .text-white\/70 { color: rgba(0, 0, 0, 0.7) !important; }
         [data-theme="light"] .options-panel { background: rgba(0, 0, 0, 0.03); border-color: rgba(0, 0, 0, 0.08); }
         [data-theme="light"] .size-input { background: rgba(0, 0, 0, 0.03); border-color: rgba(0, 0, 0, 0.1); color: #1a202c; }
+        
+        /* Theme Toggle */
+        .theme-toggle-btn { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.6); cursor: pointer; transition: all 0.2s; }
+        .theme-toggle-btn:hover { background: rgba(255, 255, 255, 0.1); color: #f472b6; }
+        [data-theme="light"] .theme-toggle-btn { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.1); color: rgba(0, 0, 0, 0.6); }
+        [data-theme="light"] .theme-toggle-btn:hover { background: rgba(0, 0, 0, 0.1); color: #ec4899; }
+        #theme-icon-light { display: none; }
+        #theme-icon-dark { display: block; }
+        [data-theme="light"] #theme-icon-light { display: block; }
+        [data-theme="light"] #theme-icon-dark { display: none; }
     </style>
 </head>
 <body>
@@ -93,6 +104,10 @@ $csrfToken = generateCsrfToken();
             <div class="nav-links">
                 <a href="/member/tools" class="nav-link"><i data-lucide="arrow-left" class="w-4 h-4"></i> Back</a>
                 <a href="/dashboard" class="nav-link"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Dashboard</a>
+                <button class="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Theme">
+                    <i data-lucide="sun" id="theme-icon-light" class="w-4 h-4"></i>
+                    <i data-lucide="moon" id="theme-icon-dark" class="w-4 h-4"></i>
+                </button>
             </div>
         </div>
 
@@ -191,6 +206,16 @@ $csrfToken = generateCsrfToken();
 
             processBtn.disabled = false;
         });
+        
+        // Theme Toggle
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme') || 'dark';
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('pixelhop-theme', next);
+            lucide.createIcons();
+        }
     </script>
 </body>
 </html>

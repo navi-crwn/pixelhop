@@ -172,8 +172,17 @@ $csrfToken = generateCsrfToken();
             background: rgba(0, 0, 0, 0.08);
         }
 
-        [data-theme="light"] .gallery-empty {
+        [data-theme="light"] .gallery-empty,
+        [data-theme="light"] .activity-time {
             color: rgba(0, 0, 0, 0.4);
+        }
+
+        [data-theme="light"] .activity-item {
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        [data-theme="light"] .activity-text {
+            color: #1a202c;
         }
 
         [data-theme="light"] .progress-bg {
@@ -507,11 +516,11 @@ $csrfToken = generateCsrfToken();
             color: #0891b2;
         }
 
-        #theme-icon-light { display: none; }
-        #theme-icon-dark { display: block; }
+        #theme-icon-light, #theme-icon-light-nav { display: none; }
+        #theme-icon-dark, #theme-icon-dark-nav { display: block; }
 
-        [data-theme="light"] #theme-icon-light { display: block; }
-        [data-theme="light"] #theme-icon-dark { display: none; }
+        [data-theme="light"] #theme-icon-light, [data-theme="light"] #theme-icon-light-nav { display: block; }
+        [data-theme="light"] #theme-icon-dark, [data-theme="light"] #theme-icon-dark-nav { display: none; }
 
         [data-theme="light"] .footer-text {
             color: rgba(0, 0, 0, 0.5) !important;
@@ -556,19 +565,22 @@ $csrfToken = generateCsrfToken();
                     <i data-lucide="wrench" class="w-4 h-4"></i>
                     Tools
                 </a>
+                <a href="/member/settings" class="nav-link">
+                    <i data-lucide="settings" class="w-4 h-4"></i>
+                    Settings
+                </a>
                 <?php if ($isAdmin): ?>
                 <a href="/admin/dashboard" class="nav-link">
                     <i data-lucide="shield" class="w-4 h-4"></i>
                     Admin
                 </a>
                 <?php endif; ?>
-                <a href="/member/settings" class="nav-link">
-                    <i data-lucide="settings" class="w-4 h-4"></i>
-                    Settings
-                </a>
-                <a href="/member/upload" class="nav-link">
-                    <i data-lucide="upload" class="w-4 h-4"></i>
-                    Upload
+                <button onclick="toggleTheme()" class="theme-toggle-btn" title="Toggle theme">
+                    <i data-lucide="sun" class="w-4 h-4" id="theme-icon-light-nav"></i>
+                    <i data-lucide="moon" class="w-4 h-4" id="theme-icon-dark-nav"></i>
+                </button>
+                <a href="/auth/logout" class="nav-link" style="color: #ef4444;">
+                    <i data-lucide="log-out" class="w-4 h-4"></i>
                 </a>
             </div>
         </div>

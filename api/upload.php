@@ -39,8 +39,22 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 // Security Firewall Check
 require_once __DIR__ . '/../includes/SecurityFirewall.php';
 require_once __DIR__ . '/../includes/R2StorageManager.php';
+
+// Bypass firewall for valid API token requests (e.g. Shottr)
+$_preAuthToken = $_SERVER['HTTP_X_UPLOAD_TOKEN'] ?? $_POST['upload_token'] ?? null;
+$_tokenBypass = false;
+if ($_preAuthToken) {
+    require_once __DIR__ . '/../includes/Database.php';
+    $_tokenCheckDb = Database::getInstance();
+    $_tokenCheckStmt = $_tokenCheckDb->prepare('SELECT id FROM users WHERE upload_token = ? AND is_blocked = 0 LIMIT 1');
+    $_tokenCheckStmt->execute([$_preAuthToken]);
+    if ($_tokenCheckStmt->fetch()) {
+        $_tokenBypass = true;
+    }
+}
+
 $firewall = new SecurityFirewall();
-$firewallCheck = $firewall->checkUpload();
+$firewallCheck = $_tokenBypass ? ['allowed' => true] : $firewall->checkUpload();
 if (!$firewallCheck['allowed']) {
     uploadDebug('firewall_block', [
         'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
@@ -58,7 +72,9 @@ $config = require __DIR__ . '/../config/s3.php';
 
 // AbuseGuard check - before processing upload
 require_once __DIR__ . '/../core/AbuseGuard.php';
+require_once __DIR__ . '/../core/SafeGuard.php';
 $abuseGuard = new AbuseGuard();
+$safeGuard = new SafeGuard();
 $clientIP = $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
 // Handle comma-separated IPs from X-Forwarded-For
 if (strpos($clientIP, ',') !== false) {
@@ -67,6 +83,22 @@ if (strpos($clientIP, ',') !== false) {
 
 session_start();
 $sessionUserId = $_SESSION['user_id'] ?? null;
+
+// API token auth (for Shottr / external tools)
+if (!$sessionUserId) {
+    $uploadToken = $_SERVER['HTTP_X_UPLOAD_TOKEN'] ?? $_POST['upload_token'] ?? null;
+    if ($uploadToken) {
+        require_once __DIR__ . '/../includes/Database.php';
+        $tokenDb = Database::getInstance();
+        $tokenStmt = $tokenDb->prepare('SELECT id FROM users WHERE upload_token = ? AND is_blocked = 0 LIMIT 1');
+        $tokenStmt->execute([$uploadToken]);
+        $tokenUser = $tokenStmt->fetch(PDO::FETCH_ASSOC);
+        if ($tokenUser) {
+            $sessionUserId = (int)$tokenUser['id'];
+        }
+    }
+}
+
 $fileSize = $_FILES['image']['size'] ?? 0;
 
 $abuseCheck = $abuseGuard->checkUpload($clientIP, $sessionUserId, $fileSize);
@@ -195,6 +227,43 @@ if ($file['size'] > $config['upload']['max_size']) {
     jsonResponse(false, 'File too large. Maximum size: 10 MB');
 }
 
+// Determine if uploader is guest (for priority queue)
+$isGuest = empty($sessionUserId);
+
+// SafeGuard AI Content Moderation Check
+$safetyCheck = $safeGuard->analyzeImage($file['tmp_name']);
+uploadDebug('safeguard_check', [
+    'result' => $safetyCheck,
+    'ip' => $clientIP,
+    'user_id' => $sessionUserId,
+    'is_guest' => $isGuest,
+]);
+
+if (!$safetyCheck['safe'] && empty($safetyCheck['skipped']) && empty($safetyCheck['queued'])) {
+    // Content is IMMEDIATELY unsafe - block and quarantine
+    $safeGuard->quarantine(
+        'image',
+        'upload_' . time() . '_' . mt_rand(1000, 9999),
+        $file['tmp_name'],
+        $safetyCheck['threat_type'],
+        $safetyCheck['threat_details'] ?? null
+    );
+    
+    // Log the abuse incident
+    $abuseGuard->logAbuse($clientIP, 'suspicious_content', 'high', $sessionUserId, json_encode($safetyCheck));
+    
+    // Clean up temp file
+    if ($tempFilePath && file_exists($tempFilePath)) {
+        @unlink($tempFilePath);
+    }
+    
+    jsonResponse(false, 'This image has been flagged by our AI safety system and cannot be uploaded. If you believe this is an error, please contact support.', 403);
+}
+
+// If rate limited or queued, we'll allow upload but queue for async verification
+// This is the "approve first, verify later" approach
+$pendingVerification = !empty($safetyCheck['queued']) || !empty($safetyCheck['rate_limited']);
+
 // Check storage quota for logged-in users (session already started above)
 $uploadUserId = $sessionUserId;
 
@@ -248,8 +317,8 @@ if ($duplicateImage) {
     ]);
 }
 
-// Generate unique ID
-$imageId = generateId();
+// Generate descriptive unique ID with filename slug
+$imageId = generateId($file['name']);
 $extension = getExtension($mimeType);
 $timestamp = time();
 
@@ -413,6 +482,18 @@ try {
         $proxyUrls[$sizeName] = $config['site']['url'] . '/i/' . $key;
     }
 
+    // Queue for async verification if initial scan was rate limited/skipped
+    // Content is accessible immediately, but will be auto-takedown if flagged later
+    if ($pendingVerification) {
+        $safeGuard->queueForAsyncModeration(
+            'image',
+            $imageId,
+            $proxyUrls['original'] ?? ($config['site']['url'] . '/' . $imageId),
+            $isGuest,
+            $sessionUserId
+        );
+    }
+
     jsonResponse(true, null, 200, [
         'id' => $imageId,
         'filename' => $file['name'],
@@ -422,6 +503,7 @@ try {
         'view_url' => $config['site']['url'] . '/' . $imageId,
         'width' => $originalWidth,
         'height' => $originalHeight,
+        'pending_verification' => $pendingVerification ?? false,
     ]);
 
 } catch (Exception $e) {
@@ -436,15 +518,92 @@ try {
 }
 
 /**
- * Generate unique short ID
+ * Generate unique short ID (for fallback or internal use)
  */
-function generateId($length = 6) {
+function generateShortId($length = 6) {
     $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     $id = '';
     for ($i = 0; $i < $length; $i++) {
         $id .= $chars[random_int(0, strlen($chars) - 1)];
     }
     return $id;
+}
+
+/**
+ * Slugify filename to URL-safe string
+ * "rumah baru.png" -> "rumah-baru"
+ * 
+ * Strategy:
+ * - Short names (≤15 chars): use full name
+ * - Long names (>15 chars): truncate to ~15 chars, try to cut at word boundary
+ */
+function slugifyFilename($filename) {
+    // Remove file extension
+    $name = pathinfo($filename, PATHINFO_FILENAME);
+    
+    // Convert to lowercase
+    $slug = mb_strtolower($name, 'UTF-8');
+    
+    // Replace common characters with dash
+    $slug = str_replace(['_', '+', '(', ')', '[', ']', '{', '}', '@', '#', '$', '%', '&', '*', '!', '.'], '-', $slug);
+    
+    // Replace spaces and multiple dashes with single dash
+    $slug = preg_replace('/[\s]+/', '-', $slug);
+    
+    // Remove any character that is not alphanumeric or dash
+    $slug = preg_replace('/[^a-z0-9\-]/', '', $slug);
+    
+    // Remove multiple consecutive dashes
+    $slug = preg_replace('/-+/', '-', $slug);
+    
+    // Trim dashes from beginning and end
+    $slug = trim($slug, '-');
+    
+    // If slug is empty, return empty
+    if (empty($slug)) {
+        return '';
+    }
+    
+    // For short names (≤15 chars), use full name
+    // For longer names, truncate intelligently
+    $maxLength = 15;
+    
+    if (strlen($slug) > $maxLength) {
+        // Try to cut at a word boundary (dash)
+        $truncated = substr($slug, 0, $maxLength);
+        
+        // Find last dash position
+        $lastDash = strrpos($truncated, '-');
+        
+        // If there's a dash in the last 5 characters, cut there for cleaner URL
+        if ($lastDash !== false && $lastDash >= ($maxLength - 5)) {
+            $slug = substr($slug, 0, $lastDash);
+        } else {
+            // Otherwise just truncate
+            $slug = rtrim($truncated, '-');
+        }
+    }
+    
+    return $slug;
+}
+
+/**
+ * Generate descriptive unique ID combining filename slug + unique code
+ * Format: {filename-slug}_{short-unique-code}
+ * Example: "rumah-baru_a3x9K2"
+ */
+function generateId($filename = null) {
+    $uniqueCode = generateShortId(6);
+    
+    if ($filename) {
+        $slug = slugifyFilename($filename);
+        if (!empty($slug)) {
+            return $slug . '_' . $uniqueCode;
+        }
+    }
+    
+    // Fallback to just unique code if no filename or empty slug
+    return $uniqueCode;
 }
 
 /**

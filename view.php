@@ -19,8 +19,9 @@ if ($path === '/result' || strpos($path, '/result') === 0) {
 
 $imageId = trim($path, '/');
 
-// Clean the ID (remove any query strings or extensions)
-$imageId = preg_replace('/[^a-zA-Z0-9]/', '', $imageId);
+// Clean the ID (remove any query strings but allow alphanumeric, underscore, and dash)
+// New format: {filename-slug}_{unique-code} e.g., "rumah-baru_a3x9K2"
+$imageId = preg_replace('/[^a-zA-Z0-9_\-]/', '', $imageId);
 
 // Load image data
 $dataFile = __DIR__ . '/data/images.json';

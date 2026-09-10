@@ -93,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 
 // Pagination
 $page = max(1, (int)($_GET['page'] ?? 1));
-$perPage = 24;
+$perPage = 8;
 $offset = ($page - 1) * $perPage;
 
 // Sort
@@ -174,12 +174,14 @@ function getProxyUrl($s3Key) {
             font-family: 'Inter', sans-serif;
             background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 50%, #0a0a0f 100%);
             min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             padding: 20px;
         }
         .dashboard-container {
             width: 100%;
-            max-width: 1200px;
-            margin: 0 auto;
+            max-width: 1000px;
             background: rgba(20, 20, 35, 0.85);
             backdrop-filter: blur(20px);
             border: 1px solid rgba(255, 255, 255, 0.08);
@@ -350,8 +352,14 @@ function getProxyUrl($s3Key) {
         .theme-toggle-btn:hover { background: rgba(255, 255, 255, 0.1); color: #22d3ee; }
         #theme-icon-light { display: none; }
         #theme-icon-dark { display: block; }
+        #theme-icon-light-header { display: none; }
+        #theme-icon-dark-header { display: block; }
         [data-theme="light"] #theme-icon-light { display: block; }
         [data-theme="light"] #theme-icon-dark { display: none; }
+        [data-theme="light"] #theme-icon-light-header { display: block; }
+        [data-theme="light"] #theme-icon-dark-header { display: none; }
+        [data-theme="light"] .theme-toggle-btn { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.1); color: rgba(0, 0, 0, 0.6); }
+        [data-theme="light"] .theme-toggle-btn:hover { background: rgba(0, 0, 0, 0.1); color: #0891b2; }
         [data-theme="light"] body { background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 50%, #f0f4f8 100%); }
         [data-theme="light"] .dashboard-container { background: rgba(255, 255, 255, 0.9); border-color: rgba(0, 0, 0, 0.1); }
         [data-theme="light"] .text-white, [data-theme="light"] h1, [data-theme="light"] h2 { color: #1a202c !important; }
@@ -395,7 +403,12 @@ function getProxyUrl($s3Key) {
                 <a href="/dashboard" class="nav-link"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Dashboard</a>
                 <a href="/gallery" class="nav-link active"><i data-lucide="images" class="w-4 h-4"></i> Gallery</a>
                 <a href="/member/tools" class="nav-link"><i data-lucide="wrench" class="w-4 h-4"></i> Tools</a>
-                <a href="/member/upload" class="nav-link"><i data-lucide="upload" class="w-4 h-4"></i> Upload</a>
+                <a href="/member/settings" class="nav-link"><i data-lucide="settings" class="w-4 h-4"></i> Settings</a>
+                <button onclick="toggleTheme()" class="theme-toggle-btn" title="Toggle theme">
+                    <i data-lucide="sun" class="w-4 h-4" id="theme-icon-light-header"></i>
+                    <i data-lucide="moon" class="w-4 h-4" id="theme-icon-dark-header"></i>
+                </button>
+                <a href="/auth/logout" class="nav-link" style="color: #ef4444;"><i data-lucide="log-out" class="w-4 h-4"></i></a>
             </div>
         </div>
 

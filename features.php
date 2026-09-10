@@ -287,6 +287,61 @@ $isAdmin = $isLoggedIn && isAdmin();
                 </div>
             </section>
 
+            <!-- AI-Powered Safety Section -->
+            <section class="glass-card p-8 mb-8" style="background: linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(34, 211, 238, 0.1) 100%); border: 1px solid rgba(34, 197, 94, 0.2);">
+                <div class="flex items-center justify-center gap-3 mb-6">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-green-500/20 to-green-500/5 flex items-center justify-center">
+                        <i data-lucide="shield-check" class="w-6 h-6 text-green-400"></i>
+                    </div>
+                    <h2 class="text-2xl font-semibold" style="color: var(--color-text-primary);">AI-Powered Safety</h2>
+                    <span class="px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-xs font-medium border border-green-500/30">SafeGuard</span>
+                </div>
+                
+                <p class="text-center text-base mb-8 max-w-3xl mx-auto" style="color: var(--color-text-secondary);">
+                    PixelHop employs cutting-edge AI and industry-standard safety tools to keep our platform clean and safe. 
+                    Every image is automatically scanned before being made public.
+                </p>
+
+                <div class="grid md:grid-cols-3 gap-6 mb-8">
+                    <div class="glass-card p-5">
+                        <div class="flex items-center gap-3 mb-3">
+                            <div class="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                                <i data-lucide="scan" class="w-5 h-5 text-blue-400"></i>
+                            </div>
+                            <h4 class="font-semibold" style="color: var(--color-text-primary);">Google Safe Browsing</h4>
+                        </div>
+                        <p class="text-sm" style="color: var(--color-text-tertiary);">Real-time URL checking against Google's threat database to block malware and phishing.</p>
+                    </div>
+                    
+                    <div class="glass-card p-5">
+                        <div class="flex items-center gap-3 mb-3">
+                            <div class="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center">
+                                <i data-lucide="bug" class="w-5 h-5 text-red-400"></i>
+                            </div>
+                            <h4 class="font-semibold" style="color: var(--color-text-primary);">VirusTotal Integration</h4>
+                        </div>
+                        <p class="text-sm" style="color: var(--color-text-tertiary);">Multi-engine scanning using 70+ antivirus engines to detect malicious content.</p>
+                    </div>
+                    
+                    <div class="glass-card p-5">
+                        <div class="flex items-center gap-3 mb-3">
+                            <div class="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                                <i data-lucide="sparkles" class="w-5 h-5 text-purple-400"></i>
+                            </div>
+                            <h4 class="font-semibold" style="color: var(--color-text-primary);">Gemini AI Vision</h4>
+                        </div>
+                        <p class="text-sm" style="color: var(--color-text-tertiary);">Advanced AI analyzes image content for CSAM, violence, and other prohibited material.</p>
+                    </div>
+                </div>
+
+                <div class="text-center">
+                    <div class="inline-flex items-center gap-2 px-4 py-2 rounded-lg" style="background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.3);">
+                        <i data-lucide="check-circle-2" class="w-5 h-5 text-green-400"></i>
+                        <span class="text-sm" style="color: var(--color-text-secondary);">Zero Tolerance Policy for CSAM & Abuse — <a href="/terms" class="text-green-400 hover:underline">Read our Terms</a></span>
+                    </div>
+                </div>
+            </section>
+
             <!-- Part of HEL.ink Family -->
             <section class="glass-card p-8 text-center" style="background: linear-gradient(135deg, rgba(34, 211, 238, 0.1) 0%, rgba(168, 85, 247, 0.1) 100%);">
                 <p class="text-xs uppercase tracking-[0.4em] mb-4" style="color: var(--color-text-muted);">Part of the HEL.ink Family</p>

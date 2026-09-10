@@ -496,6 +496,118 @@ class R2StorageManager
     }
     
     /**
+     * Generate a SigV4 query-string presigned GET URL for an object.
+     *
+     * Presigned URLs authenticate the request through query parameters, so
+     * they work for objects that are publicly readable AND for objects in a
+     * private bucket. This lets /i/ keep serving images before the bucket is
+     * switched to private (no downtime) and after.
+     *
+     * @param string $provider 'r2' or 'contabo'
+     * @param string $key      Object key, e.g. YYYY/MM/DD/id_thumb.jpg
+     * @param int    $expiresSeconds Seconds until expiry (1-604800)
+     */
+    public function getSignedUrl(string $provider, string $key, int $expiresSeconds = 300): string
+    {
+        $provider = strtolower($provider);
+
+        if ($provider === 'r2') {
+            $providerConfig = $this->r2Config;
+            $defaultRegion = 'auto';
+        } elseif ($provider === 'contabo' || $provider === 's3') {
+            $providerConfig = $this->contaboConfig;
+            $defaultRegion = 'default';
+        } else {
+            throw new InvalidArgumentException("Unknown storage provider: {$provider}");
+        }
+
+        $endpoint = $providerConfig['endpoint'] ?? '';
+        $bucket = $providerConfig['bucket'] ?? '';
+        $accessKey = $providerConfig['access_key'] ?? '';
+        $secretKey = $providerConfig['secret_key'] ?? '';
+        $region = $providerConfig['region'] ?? $defaultRegion;
+
+        if ($endpoint === '' || $bucket === '' || $accessKey === '' || $secretKey === '') {
+            throw new RuntimeException("Missing S3 config for provider: {$provider}");
+        }
+
+        if ($expiresSeconds < 1 || $expiresSeconds > 604800) {
+            throw new InvalidArgumentException('Expires must be between 1 and 604800 seconds');
+        }
+
+        $parsedUrl = parse_url($endpoint);
+        $scheme = $parsedUrl['scheme'] ?? 'https';
+        $host = $parsedUrl['host'] ?? '';
+
+        if ($host === '') {
+            throw new RuntimeException("Invalid S3 endpoint for provider: {$provider}");
+        }
+
+        // Match the existing uploadToS3/makeS3Request path-style URI exactly:
+        // /{bucket}/{key} with each key segment rawurlencoded (slashes kept).
+        $encodedKey = str_replace('%2F', '/', rawurlencode($key));
+        $canonicalUri = '/' . $bucket . '/' . $encodedKey;
+
+        $longDate = gmdate('Ymd\THis\Z');
+        $shortDate = gmdate('Ymd');
+        $algorithm = 'AWS4-HMAC-SHA256';
+        $credentialScope = "{$shortDate}/{$region}/s3/aws4_request";
+
+        // Canonical query string is sorted by parameter name. The signature is
+        // not part of the canonical request; it is added to the final URL.
+        $query = [
+            'X-Amz-Algorithm' => $algorithm,
+            'X-Amz-Credential' => $accessKey . '/' . $credentialScope,
+            'X-Amz-Date' => $longDate,
+            'X-Amz-Expires' => (string) $expiresSeconds,
+            'X-Amz-SignedHeaders' => 'host',
+        ];
+        ksort($query);
+
+        $canonicalQueryString = '';
+        foreach ($query as $name => $value) {
+            if ($canonicalQueryString !== '') {
+                $canonicalQueryString .= '&';
+            }
+            $canonicalQueryString .= rawurlencode($name) . '=' . rawurlencode($value);
+        }
+
+        $canonicalHeaders = "host:{$host}\n";
+        $signedHeaders = 'host';
+
+        $canonicalRequest = "GET\n"
+            . $canonicalUri . "\n"
+            . $canonicalQueryString . "\n"
+            . $canonicalHeaders . "\n"
+            . $signedHeaders . "\n"
+            . 'UNSIGNED-PAYLOAD';
+
+        $stringToSign = $algorithm . "\n"
+            . $longDate . "\n"
+            . $credentialScope . "\n"
+            . hash('sha256', $canonicalRequest);
+
+        $kDate = hash_hmac('sha256', $shortDate, 'AWS4' . $secretKey, true);
+        $kRegion = hash_hmac('sha256', $region, $kDate, true);
+        $kService = hash_hmac('sha256', 's3', $kRegion, true);
+        $kSigning = hash_hmac('sha256', 'aws4_request', $kService, true);
+        $signature = hash_hmac('sha256', $stringToSign, $kSigning);
+
+        $query['X-Amz-Signature'] = $signature;
+        ksort($query);
+
+        $finalQueryString = '';
+        foreach ($query as $name => $value) {
+            if ($finalQueryString !== '') {
+                $finalQueryString .= '&';
+            }
+            $finalQueryString .= rawurlencode($name) . '=' . rawurlencode($value);
+        }
+
+        return "{$scheme}://{$host}/{$bucket}/{$encodedKey}?{$finalQueryString}";
+    }
+
+    /**
      * Get storage status for admin dashboard
      */
     public function getStorageStatus(): array

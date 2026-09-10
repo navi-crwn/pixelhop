@@ -32,6 +32,7 @@ require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/includes/Database.php';
 require_once __DIR__ . '/includes/JsonStore.php';
 require_once __DIR__ . '/includes/ClientIp.php';
+require_once __DIR__ . '/includes/R2StorageManager.php';
 
 // Batas ukuran body upstream (50MB). Di atas ini kita tolak dengan 502.
 const PIXELHOP_IMAGE_MAX_BYTES = 50 * 1024 * 1024;
@@ -267,12 +268,16 @@ if (!empty($image['user_id'])) {
 
 $config = require __DIR__ . '/config/s3.php';
 
+$r2Manager = new R2StorageManager($config);
+
 if (in_array($sizeType, ['thumb', 'medium'], true) && !empty($config['r2']['enabled'])) {
     // Thumbnail & medium -> Cloudflare R2 (zero egress).
-    $storageUrl = $config['r2']['public_url'] . '/' . $imagePath;
+    // Presigned SigV4 URL: works on public objects today and keeps working
+    // after the bucket is switched to private (no downtime).
+    $storageUrl = $r2Manager->getSignedUrl('r2', $imagePath, 300);
 } else {
     // Original & large -> Contabo S3.
-    $storageUrl = $config['s3']['public_url'] . '/' . $imagePath;
+    $storageUrl = $r2Manager->getSignedUrl('contabo', $imagePath, 300);
 }
 
 $contentTypeByExtension = [

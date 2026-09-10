@@ -2,6 +2,9 @@
 /**
  * PixelHop - Contact Us
  */
+require_once __DIR__ . '/includes/JsonStore.php';
+require_once __DIR__ . '/includes/ClientIp.php';
+
 $config = require __DIR__ . '/config/s3.php';
 $siteName = $config['site']['name'];
 $success = false;
@@ -14,28 +17,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $subject = trim($_POST['subject'] ?? '');
     $message = trim($_POST['message'] ?? '');
 
+    // Batasi panjang field agar data tersimpan tidak tak terbatas.
+    $name = mb_substr($name, 0, 100);
+    $email = mb_substr($email, 0, 255);
+    $subject = mb_substr($subject, 0, 200);
+    $message = mb_substr($message, 0, 2000);
 
     if (empty($name) || empty($email) || empty($message)) {
         $error = 'Please fill in all required fields.';
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $error = 'Please enter a valid email address.';
     } else {
+        // Minimalkan PII: simpan IP hanya sebagai hash, bukan alamat mentah.
+        $ipHash = hash('sha256', ClientIp::get() . 'pixelhop_salt');
 
         $contact = [
             'name' => $name,
             'email' => $email,
             'subject' => $subject,
             'message' => $message,
-            'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+            'ip_hash' => $ipHash,
             'timestamp' => date('c')
         ];
 
-        $contactsFile = __DIR__ . '/data/contacts.json';
-        $contacts = file_exists($contactsFile) ? json_decode(file_get_contents($contactsFile), true) : [];
-        $contacts[] = $contact;
-        file_put_contents($contactsFile, json_encode($contacts, JSON_PRETTY_PRINT));
-
-        $success = true;
+        try {
+            $contactsStore = new JsonStore(__DIR__ . '/data/contacts.json');
+            // RMW atomik (flock + tulis via temp file + rename) lewat JsonStore.
+            $contactsStore->mutate(function (array $contacts) use ($contact): array {
+                $contacts[] = $contact;
+                return $contacts;
+            });
+            $success = true;
+        } catch (Throwable $e) {
+            // Jangan bocorkan detail internal ke pengguna; catat ke log saja.
+            error_log('contact.php: failed to store contact message - ' . $e->getMessage());
+            $error = 'Sorry, we could not send your message right now. Please try again later.';
+        }
     }
 }
 ?>

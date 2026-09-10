@@ -43,6 +43,7 @@ require_once __DIR__ . '/../includes/ImageHandler.php';
 require_once __DIR__ . '/../includes/RateLimiter.php';
 require_once __DIR__ . '/../auth/middleware.php';
 require_once __DIR__ . '/../core/Gatekeeper.php';
+require_once __DIR__ . '/../includes/Logger.php';
 
 // Check if tool is disabled
 $gatekeeper = new Gatekeeper();
@@ -245,10 +246,13 @@ try {
     }
 
 } catch (InvalidArgumentException $e) {
-    jsonError($e->getMessage(), 400);
+    // Detail validasi HANYA ke log server; klien menerima pesan generik.
+    Logger::error('crop', $e->getMessage(), ['code' => 400, 'exception' => get_class($e)]);
+    jsonError('Invalid image or parameters. Please check your input and try again.', 400);
 } catch (Exception $e) {
-    error_log('Crop error: ' . $e->getMessage());
-    jsonError('Processing failed: ' . $e->getMessage(), 500);
+    // Detail internal (Imagick/path/S3) HANYA ke log server, tidak ke klien.
+    Logger::error('crop', $e->getMessage(), ['code' => 500, 'exception' => get_class($e)]);
+    jsonError('Processing failed. Please try again.', 500);
 }
 
 /**

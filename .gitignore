@@ -1,11 +1,8 @@
 # Credentials & Secrets
 credentials.md
-config/database.php
-config/oauth.php
-config/s3.php
-config/mail.php
-config/turnstile.php
-config/security.php
+# Semua config lokal di-ignore, contoh (*.example.php) tetap ter-track.
+config/*.php
+!config/*.example.php
 .env
 
 # Backup files
@@ -36,6 +33,12 @@ data/images.json
 data/abuse_reports.json
 data/expiration_log.json
 data/ratelimit/
+data/contacts.json
+data/deletion_queue.json
+data/backups/
+data/privatize_log.json
+data/abuse_counters.json
+data/*.bak*
 
 # Logs
 *.log

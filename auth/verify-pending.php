@@ -4,7 +4,14 @@
  * Shown after registration to prompt user to check email
  */
 
-session_start();
+require_once __DIR__ . '/../includes/bootstrap.php';
+
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrfToken = $_SESSION['csrf_token'];
+$pendingEmail = $_SESSION['pending_verification_email'] ?? '';
+
 $config = require __DIR__ . '/../config/s3.php';
 $siteName = $config['site']['name'] ?? 'PixelHop';
 ?>
@@ -223,7 +230,11 @@ $siteName = $config['site']['name'] ?? 'PixelHop';
             try {
                 const response = await fetch('/auth/resend-verification.php', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        csrf_token: <?= json_encode($csrfToken) ?>,
+                        email: <?= json_encode($pendingEmail) ?>
+                    })
                 });
                 
                 const result = await response.json();

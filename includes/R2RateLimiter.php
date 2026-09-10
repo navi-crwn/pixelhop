@@ -21,10 +21,14 @@ class R2RateLimiter
     private const CLASS_B_MONTHLY_LIMIT = 9000000; // Buffer from 10M
     
     private ?PDO $db = null;
-    
+    private array $settings = ['security_failopen_override' => 0];
+    private static bool $preflightChecked = false;
+    private static ?bool $preflightTableExists = null;
+
     public function __construct()
     {
         $this->initDatabase();
+        $this->loadSettings();
     }
     
     private function initDatabase(): void
@@ -32,33 +36,59 @@ class R2RateLimiter
         try {
             require_once __DIR__ . '/Database.php';
             $this->db = Database::getInstance();
-            $this->ensureTable();
+            $this->runPreflight();
         } catch (Exception $e) {
             error_log('R2RateLimiter: Database init failed - ' . $e->getMessage());
         }
     }
     
     /**
-     * Ensure the r2_operations table exists
+     * Muat tombol darurat security_failopen_override dari site_settings.
+     * Nilai di-cache per proses; bila DB error, gunakan default 0 (deny).
      */
-    private function ensureTable(): void
+    private function loadSettings(): void
     {
+        if (!$this->db) {
+            return;
+        }
+
         try {
-            $this->db->exec("
-                CREATE TABLE IF NOT EXISTS r2_operations (
-                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                    operation_class ENUM('A', 'B') NOT NULL,
-                    operation_type VARCHAR(32) NOT NULL,
-                    file_key VARCHAR(512) NULL,
-                    file_size INT UNSIGNED DEFAULT 0,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    
-                    INDEX idx_class_date (operation_class, created_at),
-                    INDEX idx_created_at (created_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            ");
+            $stmt = $this->db->prepare("SELECT setting_value FROM site_settings WHERE setting_key = 'security_failopen_override'");
+            $stmt->execute();
+            $value = $stmt->fetchColumn();
+            if ($value !== false) {
+                $this->settings['security_failopen_override'] = (int)$value;
+            }
         } catch (PDOException $e) {
-            // Table might already exist, ignore
+            error_log('R2RateLimiter: loadSettings failed - ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Preflight sekali-per-proses (static flag).
+     *
+     * DDL inline telah dihapus (D5-03). Tabel r2_operations kini dibuat di
+     * database/schema.sql. Bila tabel tidak tersedia, error_log keras dan
+     * semua operasi R2 baru ditolak (fail-closed), kecuali admin mengaktifkan
+     * tombol darurat security_failopen_override.
+     */
+    private function runPreflight(): void
+    {
+        if (self::$preflightChecked) {
+            return;
+        }
+
+        self::$preflightChecked = true;
+
+        try {
+            $stmt = $this->db->query("SHOW TABLES LIKE 'r2_operations'");
+            self::$preflightTableExists = $stmt->fetch() !== false;
+        } catch (PDOException $e) {
+            self::$preflightTableExists = false;
+        }
+
+        if (self::$preflightTableExists === false) {
+            error_log('R2RateLimiter: Table r2_operations missing. Run database/schema.sql.');
         }
     }
     
@@ -83,8 +113,9 @@ class R2RateLimiter
      */
     private function checkLimit(string $class, int $dailyLimit, int $monthlyLimit): bool
     {
-        if (!$this->db) {
-            return true; // Allow if no DB (fail open for operations)
+        if (!$this->db || self::$preflightTableExists === false) {
+            error_log("R2RateLimiter: Class {$class} cannot be verified - denying new R2 operations (fail-closed)");
+            return (bool)$this->settings['security_failopen_override'];
         }
         
         try {
@@ -119,7 +150,7 @@ class R2RateLimiter
             return true;
         } catch (PDOException $e) {
             error_log('R2RateLimiter: Check failed - ' . $e->getMessage());
-            return true; // Fail open
+            return (bool)$this->settings['security_failopen_override']; // Fail closed: DB error means deny new R2 operations unless overridden
         }
     }
     
@@ -144,7 +175,8 @@ class R2RateLimiter
      */
     private function recordOperation(string $class, string $type, ?string $fileKey, int $fileSize): void
     {
-        if (!$this->db) {
+        if (!$this->db || self::$preflightTableExists === false) {
+            error_log("R2RateLimiter: Cannot record Class {$class} operation - DB/table unavailable");
             return;
         }
         

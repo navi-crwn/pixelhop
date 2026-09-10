@@ -2,6 +2,13 @@
 -- R2 Storage Tracking Table
 -- Add to existing schema for hybrid R2 + Contabo storage
 -- ================================
+--
+-- ⚠️  DEPRECATED — DO NOT RUN THIS FILE.
+-- Definisi tabel `storage_stats` dan `image_storage` di bawah ini sudah
+-- terserap ke `database/schema.sql` (canonical). Gunakan schema.sql sebagai
+-- satu-satunya sumber kebenaran skema. File ini dipertahankan hanya sebagai
+-- referensi historis dan TIDAK dihapus.
+-- ================================
 
 -- Storage usage tracking per provider
 CREATE TABLE IF NOT EXISTS storage_stats (

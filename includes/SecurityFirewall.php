@@ -16,13 +16,16 @@ class SecurityFirewall
     private ?PDO $db = null;
     private string $clientIP;
     private array $settings = [];
+    private bool $preflightMissing = false;
+    private static bool $preflightChecked = false;
+    private static ?bool $preflightTablesExist = null;
     
     // Blocked patterns in user agents
     private const BAD_BOTS = [
         'semrush', 'ahref', 'mj12bot', 'dotbot', 'petalbot',
         'baiduspider', 'yandexbot', 'sogou', 'exabot',
-        'gigabot', 'ia_archiver', 'webzip', 'wget', 'curl',
-        'python-requests', 'python-urllib', 'libwww-perl',
+        'gigabot', 'ia_archiver', 'webzip',
+        'python-urllib', 'libwww-perl',
         'nikto', 'sqlmap', 'nmap', 'masscan', 'zgrab',
     ];
     
@@ -50,59 +53,40 @@ class SecurityFirewall
         try {
             require_once __DIR__ . '/Database.php';
             $this->db = Database::getInstance();
-            $this->ensureTables();
+            $this->runPreflight();
         } catch (Exception $e) {
             error_log('SecurityFirewall: Database init failed - ' . $e->getMessage());
         }
     }
     
-    private function ensureTables(): void
+    /**
+     * Preflight sekali-per-proses (static flag).
+     *
+     * DDL inline telah dihapus (D5-03). Tabel kini dibuat di
+     * database/schema.sql. Cukup periksa bahwa tabel ip_requests tersedia;
+     * bila tidak, firewall dimatikan (fail-closed state di-handle per-query)
+     * dan error_log keras agar operator segera menjalankan schema.
+     */
+    private function runPreflight(): void
     {
+        if (self::$preflightChecked) {
+            $this->preflightMissing = (self::$preflightTablesExist === false);
+            return;
+        }
+        
+        self::$preflightChecked = true;
+        
         try {
-            // Blocked IPs table
-            $this->db->exec("
-                CREATE TABLE IF NOT EXISTS blocked_ips (
-                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                    ip_address VARCHAR(45) NOT NULL,
-                    reason VARCHAR(255) NOT NULL,
-                    blocked_until DATETIME NULL COMMENT 'NULL = permanent',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    
-                    UNIQUE KEY unique_ip (ip_address),
-                    INDEX idx_blocked_until (blocked_until)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            ");
-            
-            // Security events log
-            $this->db->exec("
-                CREATE TABLE IF NOT EXISTS security_events (
-                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                    ip_address VARCHAR(45) NOT NULL,
-                    event_type VARCHAR(32) NOT NULL,
-                    details TEXT NULL,
-                    user_agent VARCHAR(512) NULL,
-                    request_uri VARCHAR(512) NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    
-                    INDEX idx_ip_type (ip_address, event_type),
-                    INDEX idx_created_at (created_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            ");
-            
-            // IP request tracking for rate limiting
-            $this->db->exec("
-                CREATE TABLE IF NOT EXISTS ip_requests (
-                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                    ip_address VARCHAR(45) NOT NULL,
-                    request_path VARCHAR(255) NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    
-                    INDEX idx_ip_time (ip_address, created_at),
-                    INDEX idx_created_at (created_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            ");
+            $stmt = $this->db->query("SHOW TABLES LIKE 'ip_requests'");
+            self::$preflightTablesExist = $stmt->fetch() !== false;
         } catch (PDOException $e) {
-            // Tables might already exist
+            self::$preflightTablesExist = false;
+        }
+        
+        if (self::$preflightTablesExist === false) {
+            $this->preflightMissing = true;
+            $this->settings['enabled'] = false;
+            error_log('SecurityFirewall: Table ip_requests missing - firewall disabled for this process. Run database/schema.sql.');
         }
     }
     
@@ -114,7 +98,7 @@ class SecurityFirewall
             'block_suspicious_patterns' => true,
             'rate_limit_enabled' => true,
             'rate_limit_requests' => 100,      // requests per minute
-            'rate_limit_uploads' => 300,       // uploads per hour (raised to reduce false 429s)
+            'rate_limit_uploads' => 20,        // uploads per hour (selaras seed database/r2_security_migration.sql)
             'auto_block_threshold' => 10,      // suspicious events before auto-block
             'auto_block_duration' => 24,       // hours
             'blocked_countries' => [],         // empty = don't block by country
@@ -123,13 +107,17 @@ class SecurityFirewall
         // Load from database if available
         if ($this->db) {
             try {
-                $stmt = $this->db->query("SELECT setting_key, setting_value FROM site_settings WHERE setting_key LIKE 'firewall_%'");
+                $stmt = $this->db->query("SELECT setting_key, setting_value FROM site_settings WHERE setting_key LIKE 'firewall_%' OR setting_key = 'security_failopen_override'");
                 foreach ($stmt->fetchAll() as $row) {
                     $key = str_replace('firewall_', '', $row['setting_key']);
                     $this->settings[$key] = $row['setting_value'];
                 }
             } catch (PDOException $e) {
                 // Use defaults
+            }
+            
+            if ($this->preflightMissing) {
+                $this->settings['enabled'] = false;
             }
         }
     }
@@ -138,7 +126,7 @@ class SecurityFirewall
      * Main check - run on every request
      * Returns true if request is allowed, false if blocked
      */
-    public function check(): array
+    public function check(bool $trackRequest = true): array
     {
         if (!$this->settings['enabled']) {
             return ['allowed' => true];
@@ -184,8 +172,11 @@ class SecurityFirewall
             ];
         }
         
-        // Track this request
-        $this->trackRequest();
+        // Track this request AFTER all limit checks so the current request
+        // is not counted against itself (off-by-one).
+        if ($trackRequest) {
+            $this->trackRequest();
+        }
         
         return ['allowed' => true];
     }
@@ -195,13 +186,19 @@ class SecurityFirewall
      */
     public function checkUpload(): array
     {
-        $baseCheck = $this->check();
+        // Hormati flag enabled (D3-11): bila firewall dimatikan (termasuk
+        // preflight gagal), izinkan upload dan jangan evaluasi limit upload.
+        if (!$this->settings['enabled']) {
+            return ['allowed' => true];
+        }
+        
+        $baseCheck = $this->check(false);
         if (!$baseCheck['allowed']) {
             return $baseCheck;
         }
         
         // Additional upload rate limiting
-        if ($this->isUploadRateLimited()) {
+        if ($this->settings['rate_limit_enabled'] && $this->isUploadRateLimited()) {
             $this->logEvent('upload_rate_limited');
             return [
                 'allowed' => false,
@@ -209,6 +206,9 @@ class SecurityFirewall
                 'code' => 429,
             ];
         }
+        
+        // Track the upload request after its own limit checks.
+        $this->trackRequest();
         
         return ['allowed' => true];
     }
@@ -228,7 +228,8 @@ class SecurityFirewall
     private function isIPBlocked(): bool
     {
         if (!$this->db) {
-            return false;
+            error_log('SecurityFirewall: isIPBlocked unavailable (no DB) - fail-closed');
+            return !($this->settings['security_failopen_override'] ?? false);
         }
         
         try {
@@ -240,7 +241,8 @@ class SecurityFirewall
             $stmt->execute([$this->clientIP]);
             return $stmt->fetch() !== false;
         } catch (PDOException $e) {
-            return false;
+            error_log('SecurityFirewall: isIPBlocked check failed - ' . $e->getMessage());
+            return !($this->settings['security_failopen_override'] ?? false);
         }
     }
     
@@ -255,8 +257,15 @@ class SecurityFirewall
             return true; // No user agent = suspicious
         }
         
-        foreach (self::BAD_BOTS as $bot) {
-            if (strpos($userAgent, $bot) !== false) {
+        $bots = array_merge(
+            self::BAD_BOTS,
+            array_filter(array_map('strtolower', array_map('trim',
+                explode(',', (string)($this->settings['firewall_bad_bot_extra'] ?? ''))
+            )))
+        );
+        
+        foreach ($bots as $bot) {
+            if ($bot !== '' && strpos($userAgent, $bot) !== false) {
                 return true;
             }
         }
@@ -269,8 +278,10 @@ class SecurityFirewall
      */
     private function hasSuspiciousPattern(): bool
     {
-        $uri = strtolower($_SERVER['REQUEST_URI'] ?? '');
-        $queryString = strtolower($_SERVER['QUERY_STRING'] ?? '');
+        // URL-decode sebelum substring-matching agar bypass seperti
+        // %2e%2e%2f (../) tertangkap.
+        $uri = strtolower(rawurldecode($_SERVER['REQUEST_URI'] ?? ''));
+        $queryString = strtolower(rawurldecode($_SERVER['QUERY_STRING'] ?? ''));
         
         foreach (self::SUSPICIOUS_PATTERNS as $pattern) {
             if (strpos($uri, $pattern) !== false || strpos($queryString, $pattern) !== false) {
@@ -278,11 +289,15 @@ class SecurityFirewall
             }
         }
         
-        // Check POST data for injection attempts
+        // Check POST data for injection attempts. Skip body inspection for
+        // multipart uploads (php://input is not populated for multipart).
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $postData = file_get_contents('php://input');
-            if (preg_match('/(union\s+select|<script|javascript:|on\w+\s*=)/i', $postData)) {
-                return true;
+            $contentType = strtolower($_SERVER['CONTENT_TYPE'] ?? '');
+            if (!str_starts_with($contentType, 'multipart/form-data')) {
+                $postData = file_get_contents('php://input');
+                if (preg_match('/(union\s+select|<script|javascript:|on\w+\s*=)/i', $postData)) {
+                    return true;
+                }
             }
         }
         
@@ -295,11 +310,14 @@ class SecurityFirewall
     private function isRateLimited(): bool
     {
         if (!$this->db) {
-            return false;
+            error_log('SecurityFirewall: isRateLimited unavailable (no DB) - fail-closed');
+            return !($this->settings['security_failopen_override'] ?? false);
         }
         
         try {
-            // Count requests in last minute
+            // Count requests in last minute. The current request is inserted
+            // by trackRequest() AFTER all limit checks, so it is not counted
+            // against itself (off-by-one fix).
             $stmt = $this->db->prepare("
                 SELECT COUNT(*) FROM ip_requests 
                 WHERE ip_address = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 MINUTE)
@@ -309,7 +327,8 @@ class SecurityFirewall
             
             return $count >= $this->settings['rate_limit_requests'];
         } catch (PDOException $e) {
-            return false;
+            error_log('SecurityFirewall: isRateLimited check failed - ' . $e->getMessage());
+            return !($this->settings['security_failopen_override'] ?? false);
         }
     }
     
@@ -318,12 +337,18 @@ class SecurityFirewall
      */
     private function isUploadRateLimited(): bool
     {
-        if (!$this->db) {
+        if (!$this->settings['rate_limit_enabled']) {
             return false;
         }
         
+        if (!$this->db) {
+            error_log('SecurityFirewall: isUploadRateLimited unavailable (no DB) - fail-closed');
+            return !($this->settings['security_failopen_override'] ?? false);
+        }
+        
         try {
-            // Count uploads in last hour
+            // Count uploads in last hour. The current upload request is
+            // inserted by trackRequest() AFTER this check.
             $stmt = $this->db->prepare("
                 SELECT COUNT(*) FROM ip_requests 
                 WHERE ip_address = ? 
@@ -335,7 +360,8 @@ class SecurityFirewall
             
             return $count >= $this->settings['rate_limit_uploads'];
         } catch (PDOException $e) {
-            return false;
+            error_log('SecurityFirewall: isUploadRateLimited check failed - ' . $e->getMessage());
+            return !($this->settings['security_failopen_override'] ?? false);
         }
     }
     

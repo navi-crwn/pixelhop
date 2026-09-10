@@ -4,7 +4,7 @@
  * Compact Centered Design
  */
 
-session_start();
+require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/auth/middleware.php';
 require_once __DIR__ . '/includes/Database.php';
 require_once __DIR__ . '/core/Gatekeeper.php';
@@ -62,7 +62,9 @@ if (file_exists($imagesFile)) {
 
 // Get recent tool usage
 $userId = $currentUser['id'];
-$recentLogs = $db->query("SELECT * FROM usage_logs WHERE user_id = $userId ORDER BY created_at DESC LIMIT 5")->fetchAll(PDO::FETCH_ASSOC);
+$recentLogsStmt = $db->prepare("SELECT * FROM usage_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 5");
+$recentLogsStmt->execute([$userId]);
+$recentLogs = $recentLogsStmt->fetchAll(PDO::FETCH_ASSOC);
 
 function formatBytes($bytes) {
     if ($bytes >= 1073741824) return round($bytes / 1073741824, 2) . ' GB';

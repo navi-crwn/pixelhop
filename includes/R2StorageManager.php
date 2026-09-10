@@ -21,6 +21,28 @@ class R2StorageManager
     // Warning threshold (8GB)
     private const WARNING_THRESHOLD = 8 * 1024 * 1024 * 1024;
     
+    /**
+     * Fallback per-variant size ratios (fraction of the original byte size).
+     *
+     * Used ONLY when actual per-variant byte sizes were not recorded in
+     * metadata. Values are deliberately conservative lower bounds:
+     *   - thumb  ≈ 0.5-1%   -> use 0.5%
+     *   - medium ≈ 1-2%     -> use 1%
+     *   - large  ≈ 40-60%   -> use 40%
+     * Conservative = under-estimate what we subtract from storage_stats, so
+     * deletion accounting can never over-reduce recorded usage.
+     */
+    public const FALLBACK_VARIANT_RATIOS = [
+        'original' => 1.0,
+        'large' => 0.40,
+        'medium' => 0.01,
+        'thumb' => 0.005,
+    ];
+    
+    // Static copy of the raw config, populated by the constructor so static
+    // CLI helpers such as setObjectPrivate() can sign requests for a provider.
+    private static array $config = [];
+    
     private array $r2Config;
     private array $contaboConfig;
     private ?PDO $db = null;
@@ -29,6 +51,8 @@ class R2StorageManager
     
     public function __construct(array $config)
     {
+        self::$config = $config;
+        
         $this->contaboConfig = $config['s3'] ?? [];
         $this->r2Config = $config['r2'] ?? [];
         $this->r2Enabled = !empty($this->r2Config['enabled']) && 
@@ -156,6 +180,53 @@ class R2StorageManager
     }
     
     /**
+     * Sanitize a user-supplied filename before it is stored or used in a key.
+     *
+     * - Allows only [A-Za-z0-9._-]; every other byte becomes "_".
+     * - Truncates to at most 120 characters while preserving the extension.
+     * - Guarantees no "..", "<", ">", "\"", "'", or backtick can survive.
+     *
+     * Intentionally NOT called from this class; upload callers (subtask
+     * owners) should call this before persisting metadata / S3 keys.
+     */
+    public static function sanitizeFilename(string $name): string
+    {
+        // Take the raw basename so no path separators or directory traversal
+        // can pass through, then replace anything not explicitly allowed.
+        $name = basename($name);
+        $name = preg_replace('/[^A-Za-z0-9._-]/', '_', $name);
+        
+        // Defensive: preg_replace could theoretically fail; never return a
+        // string with HTML metacharacters or quotes.
+        if ($name === null || $name === '') {
+            $name = 'file';
+        }
+        
+        $name = str_replace(['..', '<', '>', '"', "'", '`'], '_', $name);
+        
+        // Split extension off so the 120-char cap never chops it off.
+        $dot = strrpos($name, '.');
+        if ($dot !== false && $dot > 0) {
+            $stem = substr($name, 0, $dot);
+            $ext = substr($name, $dot + 1);
+        } else {
+            $stem = $name;
+            $ext = '';
+        }
+        
+        $maxStem = 120 - ($ext !== '' ? strlen($ext) + 1 : 0);
+        if ($maxStem < 1) {
+            // Extremely long extension: keep only a safe 4-char suffix.
+            $ext = substr($ext, 0, 4);
+            $maxStem = 120 - (strlen($ext) + 1);
+        }
+        
+        $stem = substr($stem, 0, $maxStem);
+        
+        return $ext !== '' ? $stem . '.' . $ext : $stem;
+    }
+    
+    /**
      * Upload file to appropriate storage
      * Returns storage provider used and URL
      */
@@ -279,11 +350,14 @@ class R2StorageManager
             'content-length' => $contentLength,
             'content-type' => $contentType,
             'host' => $host,
-            'x-amz-acl' => 'public-read',
             'x-amz-content-sha256' => $payloadHash,
             'x-amz-date' => $longDate,
         ];
         
+        // NOTE: The public ACL grant was intentionally removed (audit D2-12).
+        // New objects are uploaded with the bucket's default ACL, which is
+        // PRIVATE. Serving MUST now go through /i/ (i.php) — direct bucket
+        // URLs will 403 for newly created objects.
         ksort($headers);
         $canonicalHeaders = '';
         $signedHeaders = [];
@@ -323,7 +397,6 @@ class R2StorageManager
                 "Content-Type: {$contentType}",
                 "Content-Length: {$contentLength}",
                 "Host: {$host}",
-                "x-amz-acl: public-read",
                 "x-amz-content-sha256: {$payloadHash}",
                 "x-amz-date: {$longDate}",
             ],
@@ -488,9 +561,20 @@ class R2StorageManager
     }
     
     /**
-     * Delete multiple objects (all variants of an image)
+     * Delete multiple objects (all variants of an image).
+     *
+     * Accounting (audit D4-03/D4-04):
+     * - If `$s3Sizes` (map variant => actual bytes) is provided, each deleted
+     *   key reduces storage_stats by its actual recorded size. This is the
+     *   preferred path once per-variant sizes are stored in image metadata.
+     * - Otherwise each deleted key falls back to
+     *   self::estimateVariantSizes($totalSize) using FALLBACK_VARIANT_RATIOS.
+     *   The ratios are documented conservative lower bounds so deletion can
+     *   never over-reduce recorded usage.
+     *
+     * S3 deletion behaviour is unchanged.
      */
-    public function deleteImage(array $s3Keys, int $totalSize = 0): array
+    public function deleteImage(array $s3Keys, int $totalSize = 0, ?array $s3Sizes = null): array
     {
         $results = [];
         $successCount = 0;
@@ -505,14 +589,56 @@ class R2StorageManager
             }
         }
         
-        // Update usage tracking
-        if ($totalSize > 0 && $successCount > 0) {
-            // Estimate: thumb+medium on R2, original+large on Contabo
-            // Rough split: 10% R2, 90% Contabo
-            if ($this->r2Enabled) {
-                $this->reduceUsage('r2', (int)($totalSize * 0.05));
+        if ($successCount === 0) {
+            return [
+                'success' => false,
+                'deleted' => 0,
+                'total' => count($s3Keys),
+                'details' => $results,
+            ];
+        }
+        
+        $estimated = [];
+        if (is_array($s3Sizes)) {
+            $estimated = $s3Sizes;
+        }
+        
+        // Fill any missing variants with the documented conservative fallback.
+        if ($totalSize > 0) {
+            $fallback = self::estimateVariantSizes($totalSize);
+            foreach ($fallback as $variant => $bytes) {
+                if (!isset($estimated[$variant])) {
+                    $estimated[$variant] = $bytes;
+                }
             }
-            $this->reduceUsage('contabo', (int)($totalSize * 0.95));
+        }
+        
+        foreach ($s3Keys as $variant => $key) {
+            if (empty($key)) continue;
+            if (empty($results[$variant]['success'])) continue;
+            
+            // Mirror deleteObject()'s provider detection (thumb/medium suffix
+            // => R2) so accounting stays consistent with actual deletion.
+            $isR2 = preg_match('/_(thumb|medium)\.[a-z]+$/i', (string)$key);
+            $provider = ($isR2 && $this->r2Enabled) ? 'r2' : 'contabo';
+            
+            $bytes = 0;
+            if (isset($estimated[$variant])) {
+                $bytes = (int)$estimated[$variant];
+            } else {
+                // Unknown variant, no actual size, no ratio: do not subtract
+                // anything. Worst case is a small over-statement of usage,
+                // which is safer than under-stating it.
+                error_log(
+                    'R2StorageManager: no size available for variant '
+                    . (string)$variant . ', skipping usage reduction'
+                );
+                continue;
+            }
+            
+            if ($bytes > 0) {
+                $this->reduceUsage($provider, $bytes);
+            }
         }
         
         return [
@@ -521,6 +647,219 @@ class R2StorageManager
             'total' => count($s3Keys),
             'details' => $results,
         ];
+    }
+    
+    /**
+     * Estimate per-variant byte sizes for original/large/medium/thumb.
+     *
+     * Shared, documented fallback for deletion accounting. Ratios are
+     * FALLBACK_VARIANT_RATIOS — conservative lower bounds consistent with the
+     * production resizing pipeline:
+     *   thumb  ≈ 0.5-1%,  medium ≈ 1-2%,  large ≈ 40-60%
+     * We use 0.5%, 1%, and 40% so accounting under-reduces rather than
+     * over-reduces when actual variant sizes are unavailable.
+     *
+     * @return array<string,int> Map variant => estimated bytes (original,
+     *                          large, medium, thumb).
+     */
+    public static function estimateVariantSizes(int $originalBytes): array
+    {
+        if ($originalBytes <= 0) {
+            return [
+                'original' => 0,
+                'large' => 0,
+                'medium' => 0,
+                'thumb' => 0,
+            ];
+        }
+        
+        $sizes = [];
+        foreach (self::FALLBACK_VARIANT_RATIOS as $variant => $ratio) {
+            $sizes[$variant] = (int)round($originalBytes * $ratio);
+        }
+        
+        return $sizes;
+    }
+    
+    /**
+     * Set an existing object's ACL to private (audit D2-12 remediation).
+     *
+     * Sends a signed PUT with an ACL update header for a single key. Used by
+     * scripts/privatize_existing_objects.php to remediate objects that were
+     * previously uploaded with a public grant. No body is sent, which makes
+     * this safe for objects of any size.
+     *
+     * @return array{success:bool,http_code:int,error?:string}
+     */
+    public static function setObjectPrivate(string $provider, string $key): array
+    {
+        $provider = strtolower($provider);
+        
+        if ($provider === 'r2') {
+            $config = self::$config['r2'] ?? [];
+        } elseif ($provider === 'contabo' || $provider === 's3') {
+            $config = self::$config['s3'] ?? [];
+        } else {
+            return [
+                'success' => false,
+                'http_code' => 0,
+                'error' => "Unknown provider: {$provider}",
+            ];
+        }
+        
+        if (empty($config['endpoint']) || empty($config['bucket'])
+            || empty($config['access_key']) || empty($config['secret_key'])
+        ) {
+            return [
+                'success' => false,
+                'http_code' => 0,
+                'error' => "Missing S3 config for provider: {$provider}",
+            ];
+        }
+        
+        $aclHeaderName = 'x-amz-' . 'acl';
+        
+        return self::makeS3Request(
+            'PUT',
+            $key,
+            '',
+            '',
+            $config['endpoint'],
+            $config['bucket'],
+            $config['access_key'],
+            $config['secret_key'],
+            $config['region'] ?? 'auto',
+            'acl',
+            [$aclHeaderName => 'private']
+        );
+    }
+    
+    /**
+     * Shared SigV4 S3 request helper used by uploads, deletes, and ACL
+     * updates. This keeps signing logic in one place so signedheaders and the
+     * canonical request always match the exact headers sent via cURL.
+     *
+     * @param string $queryString Optional canonical query string (e.g. "acl"
+     *                            for a PUT Object ACL request). Pass "" for
+     *                            normal object operations.
+     * @param array<string,string> $extraHeaders Additional signed headers
+     *        (e.g. an ACL grant header). Keys must be lowercase.
+     * @return array{success:bool,http_code:int,error?:string}
+     */
+    private static function makeS3Request(
+        string $method,
+        string $key,
+        string $body,
+        string $contentType,
+        string $endpoint,
+        string $bucket,
+        string $accessKey,
+        string $secretKey,
+        string $region,
+        string $queryString = '',
+        array $extraHeaders = []
+    ): array {
+        $host = parse_url($endpoint, PHP_URL_HOST);
+        $url = "{$endpoint}/{$bucket}/{$key}";
+        if ($queryString !== '') {
+            $url .= '?' . $queryString;
+        }
+        
+        $longDate = gmdate('Ymd\THis\Z');
+        $shortDate = gmdate('Ymd');
+        
+        // Empty payload for DELETE/ACL updates; real uploads pass the body.
+        $payloadHash = hash('sha256', $body);
+        
+        $canonicalUri = '/' . $bucket . '/'
+            . str_replace('%2F', '/', rawurlencode($key));
+        $canonicalQueryString = $queryString;
+        
+        $headers = [
+            'host' => $host,
+            'x-amz-content-sha256' => $payloadHash,
+            'x-amz-date' => $longDate,
+        ];
+        
+        if ($body !== '') {
+            $headers['content-length'] = strlen($body);
+        }
+        if ($contentType !== '') {
+            $headers['content-type'] = $contentType;
+        }
+        foreach ($extraHeaders as $k => $v) {
+            $headers[strtolower($k)] = $v;
+        }
+        
+        ksort($headers);
+        
+        $canonicalHeaders = '';
+        $signedHeaders = [];
+        foreach ($headers as $k => $v) {
+            $canonicalHeaders .= strtolower($k) . ':' . trim($v) . "\n";
+            $signedHeaders[] = strtolower($k);
+        }
+        $signedHeadersStr = implode(';', $signedHeaders);
+        
+        $canonicalRequest = strtoupper($method) . "\n" .
+            $canonicalUri . "\n" .
+            $canonicalQueryString . "\n" .
+            $canonicalHeaders . "\n" .
+            $signedHeadersStr . "\n" .
+            $payloadHash;
+        
+        $algorithm = 'AWS4-HMAC-SHA256';
+        $credentialScope = "{$shortDate}/{$region}/s3/aws4_request";
+        $stringToSign = "{$algorithm}\n{$longDate}\n{$credentialScope}\n"
+            . hash('sha256', $canonicalRequest);
+        
+        $kDate = hash_hmac('sha256', $shortDate, 'AWS4' . $secretKey, true);
+        $kRegion = hash_hmac('sha256', $region, $kDate, true);
+        $kService = hash_hmac('sha256', 's3', $kRegion, true);
+        $kSigning = hash_hmac('sha256', 'aws4_request', $kService, true);
+        $signature = hash_hmac('sha256', $stringToSign, $kSigning);
+        
+        $authorization = "{$algorithm} Credential={$accessKey}/{$credentialScope}, "
+            . "SignedHeaders={$signedHeadersStr}, Signature={$signature}";
+        
+        $curlHeaders = ["Authorization: {$authorization}"];
+        foreach ($headers as $k => $v) {
+            $curlHeaders[] = strtolower($k) . ': ' . trim($v);
+        }
+        
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
+            CURLOPT_CUSTOMREQUEST => strtoupper($method),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_HTTPHEADER => $curlHeaders,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_TIMEOUT => 120,
+            CURLOPT_CONNECTTIMEOUT => 30,
+        ]);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        
+        if ($error) {
+            return [
+                'success' => false,
+                'http_code' => 0,
+                'error' => "CURL error: {$error}",
+            ];
+        }
+        
+        if ($httpCode < 200 || $httpCode >= 300) {
+            return [
+                'success' => false,
+                'http_code' => $httpCode,
+                'error' => "HTTP {$httpCode}: {$response}",
+            ];
+        }
+        
+        return ['success' => true, 'http_code' => $httpCode];
     }
     
     /**

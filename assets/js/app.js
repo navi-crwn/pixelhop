@@ -458,11 +458,11 @@ function handleFiles(files) {
     // Filter for valid image files
     const validFiles = Array.from(files).filter(file => {
         const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-        return validTypes.includes(file.type) && file.size <= 15 * 1024 * 1024;
+        return validTypes.includes(file.type) && file.size <= 10 * 1024 * 1024;
     });
     
     if (validFiles.length === 0) {
-        showNotification('Please select valid image files (JPG, PNG, GIF, WebP, max 15MB)', 'error');
+        showNotification('Please select valid image files (JPG, PNG, GIF, WebP, max 10MB)', 'error');
         return;
     }
     

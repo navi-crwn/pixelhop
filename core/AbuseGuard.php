@@ -12,11 +12,26 @@
  */
 
 require_once __DIR__ . '/../includes/Database.php';
+require_once __DIR__ . '/../includes/JsonStore.php';
 
 class AbuseGuard
 {
     private PDO $db;
     private array $settings = [];
+    private static bool $preflightChecked = false;
+    private static ?bool $preflightTablesExist = null;
+
+    private const DEFAULT_SETTINGS = [
+        'abuse_threshold_uploads_per_hour' => 100,
+        'abuse_threshold_uploads_per_day' => 2000,
+        'abuse_block_duration_hours' => 24,
+        'abuse_auto_block_enabled' => 1,
+        'abuse_guest_upload_enabled' => 1,
+        'abuse_max_file_size_guest_mb' => 5,
+        'security_failopen_override' => 0,
+    ];
+
+    private const COUNTERS_FILE = __DIR__ . '/../data/abuse_counters.json';
 
 
     public const ABUSE_UPLOAD_SPAM = 'upload_spam';
@@ -28,55 +43,55 @@ class AbuseGuard
     public function __construct()
     {
         $this->db = Database::getInstance();
-        $this->ensureTables();
+        $this->runPreflight();
         $this->loadSettings();
     }
 
     /**
-     * Ensure required tables exist
-     * (blocked_ips is created by SecurityFirewall with a blocked_until column)
+     * Preflight sekali-per-proses (static flag).
+     *
+     * DDL inline telah dihapus (D5-03). Tabel abuse_logs kini dibuat di
+     * database/schema.sql. Cukup periksa ketersediaan tabel; bila tidak ada,
+     * catat error_log keras dan jangan mencoba membuat tabel di runtime.
      */
-    private function ensureTables(): void
+    private function runPreflight(): void
     {
-        try {
-            $this->db->exec("
-                CREATE TABLE IF NOT EXISTS abuse_logs (
-                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                    ip_address VARCHAR(45) NOT NULL,
-                    user_id INT UNSIGNED NULL,
-                    abuse_type VARCHAR(32) NOT NULL,
-                    severity VARCHAR(16) NOT NULL DEFAULT 'low',
-                    details TEXT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        if (self::$preflightChecked) {
+            return;
+        }
 
-                    INDEX idx_ip (ip_address),
-                    INDEX idx_created_at (created_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            ");
+        self::$preflightChecked = true;
+
+        try {
+            $stmt = $this->db->query("SHOW TABLES LIKE 'abuse_logs'");
+            self::$preflightTablesExist = $stmt->fetch() !== false;
         } catch (Exception $e) {
-            error_log('AbuseGuard: ensureTables failed - ' . $e->getMessage());
+            self::$preflightTablesExist = false;
+        }
+
+        if (self::$preflightTablesExist === false) {
+            error_log('AbuseGuard: Table abuse_logs missing. Run database/schema.sql.');
         }
     }
 
     /**
-     * Load abuse-related settings
+     * Load abuse-related settings.
+     *
+     * DEFAULT_SETTINGS adalah SUMBER TUNGGAL default (D4-05). Semua
+     * call-site checkUpload()/runWatchdog() HARUS memakai getSetting()
+     * tanpa angka inline berbeda.
      */
     private function loadSettings(): void
     {
+        $this->settings = self::DEFAULT_SETTINGS;
+
         try {
-            $stmt = $this->db->query("SELECT setting_key, setting_value FROM site_settings WHERE setting_key LIKE 'abuse_%'");
+            $stmt = $this->db->query("SELECT setting_key, setting_value FROM site_settings WHERE setting_key LIKE 'abuse_%' OR setting_key = 'security_failopen_override'");
             while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
                 $this->settings[$row['setting_key']] = $row['setting_value'];
             }
         } catch (Exception $e) {
-            $this->settings = [
-                'abuse_threshold_uploads_per_hour' => 50,
-                'abuse_threshold_uploads_per_day' => 200,
-                'abuse_block_duration_hours' => 24,
-                'abuse_auto_block_enabled' => 1,
-                'abuse_guest_upload_enabled' => 1,
-                'abuse_max_file_size_guest_mb' => 5,
-            ];
+            error_log('AbuseGuard: loadSettings failed - ' . $e->getMessage());
         }
     }
 
@@ -103,14 +118,14 @@ class AbuseGuard
             return (bool) $stmt->fetch();
         } catch (Exception $e) {
             error_log('AbuseGuard: isBlocked check failed - ' . $e->getMessage());
-            return false;
+            return !($this->settings['security_failopen_override'] ?? false);
         }
     }
 
     /**
      * Block an IP address
      */
-    public function blockIP(string $ip, string $reason = '', int $durationHours = null, string $blockedBy = 'auto'): bool
+    public function blockIP(string $ip, string $reason = '', ?int $durationHours = null, string $blockedBy = 'auto'): bool
     {
         if ($durationHours === null) {
             $durationHours = (int) $this->getSetting('abuse_block_duration_hours', 24);
@@ -213,7 +228,7 @@ class AbuseGuard
 
 
         $hourlyCount = $this->getUploadCount($ip, '-1 hour');
-        $hourlyLimit = (int) $this->getSetting('abuse_threshold_uploads_per_hour', 100);
+        $hourlyLimit = (int) $this->getSetting('abuse_threshold_uploads_per_hour');
 
         if ($hourlyCount >= $hourlyLimit) {
 
@@ -221,9 +236,9 @@ class AbuseGuard
                 "Exceeded hourly upload limit: {$hourlyCount}/{$hourlyLimit}");
 
 
-            if ($this->getSetting('abuse_auto_block_enabled', 1)) {
+            if ($this->getSetting('abuse_auto_block_enabled')) {
                 $dailyCount = $this->getUploadCount($ip, '-24 hours');
-                $dailyLimit = (int) $this->getSetting('abuse_threshold_uploads_per_day', 2000);
+                $dailyLimit = (int) $this->getSetting('abuse_threshold_uploads_per_day');
 
                 if ($dailyCount >= $dailyLimit) {
                     $this->blockIP($ip, 'Automatic block: Exceeded daily upload limit', null, 'auto');
@@ -242,7 +257,7 @@ class AbuseGuard
         
         // Check daily count limit
         $dailyCount = $this->getUploadCount($ip, '-24 hours');
-        $dailyLimit = (int) $this->getSetting('abuse_threshold_uploads_per_day', 2000);
+        $dailyLimit = (int) $this->getSetting('abuse_threshold_uploads_per_day');
         
         if ($dailyCount >= $dailyLimit) {
             $this->logAbuse($ip, self::ABUSE_UPLOAD_SPAM, 'high', $userId,
@@ -259,26 +274,147 @@ class AbuseGuard
     }
 
     /**
-     * Record successful upload (for tracking)
+     * Record successful upload (for tracking).
+     *
+     * Implementasi paling aman & sederhana: counter inkremental per-IP di
+     * data/abuse_counters.json via JsonStore::mutate(). Setiap IP menyimpan
+     * dua window {hour: {ts, count, bytes}, day: {ts, count, bytes}};
+     * window di-reset saat periode-nya lewat. Dengan ini checkUpload() tidak
+     * perlu full-scan images.json untuk hitungan 1 jam maupun 24 jam.
      */
     public function recordUpload(string $ip, ?int $userId = null, int $fileSize = 0): void
     {
+        if ($ip === '' || $ip === 'unknown') {
+            return;
+        }
 
+        try {
+            $store = new JsonStore(self::COUNTERS_FILE);
+            $store->mutate(function (array $data) use ($ip, $fileSize): array {
+                $now = time();
+                $entry = $data[$ip] ?? null;
+
+                $hour = $entry['hour'] ?? null;
+                if (!$hour || ($hour['ts'] ?? 0) < $now - 3600) {
+                    $hour = ['ts' => $now, 'count' => 0, 'bytes' => 0];
+                }
+
+                $day = $entry['day'] ?? null;
+                if (!$day || ($day['ts'] ?? 0) < $now - 86400) {
+                    $day = ['ts' => $now, 'count' => 0, 'bytes' => 0];
+                }
+
+                $hour['count'] = (int)($hour['count'] ?? 0) + 1;
+                $hour['bytes'] = (int)($hour['bytes'] ?? 0) + max(0, (int)$fileSize);
+
+                $day['count'] = (int)($day['count'] ?? 0) + 1;
+                $day['bytes'] = (int)($day['bytes'] ?? 0) + max(0, (int)$fileSize);
+
+                $data[$ip] = ['hour' => $hour, 'day' => $day];
+                return $data;
+            });
+        } catch (Throwable $e) {
+            error_log('AbuseGuard: recordUpload failed - ' . $e->getMessage());
+        }
     }
 
     /**
-     * Get upload count for IP in time period
+     * Get upload count for IP in time period.
+     *
+     * Membaca counter JsonStore (bukan full-scan images.json) untuk jendela
+     * yang dipakai aplikasi (1 jam & 24 jam). Fallback full-scan hanya untuk
+     * jendela lain yang tidak memiliki counter.
      */
     private function getUploadCount(string $ip, string $since): int
     {
+        $sinceTimestamp = strtotime($since);
 
+        try {
+            $counters = (new JsonStore(self::COUNTERS_FILE))->read();
+            $entry = $counters[$ip] ?? null;
+
+            if (!$entry) {
+                return 0;
+            }
+
+            $window = $this->pickCounterWindow($entry, $sinceTimestamp);
+            if ($window !== null) {
+                return (int)($window['count'] ?? 0);
+            }
+
+            // Jendela lain di luar 1 jam/24 jam: fallback scan.
+            return $this->scanImagesForCount($ip, $sinceTimestamp);
+        } catch (Throwable $e) {
+            error_log('AbuseGuard: getUploadCount failed - ' . $e->getMessage());
+            return $this->scanImagesForCount($ip, $sinceTimestamp);
+        }
+    }
+    
+    /**
+     * Get upload bandwidth (total bytes) for IP in time period
+     */
+    private function getUploadBandwidth(string $ip, string $since): int
+    {
+        $sinceTimestamp = strtotime($since);
+
+        try {
+            $counters = (new JsonStore(self::COUNTERS_FILE))->read();
+            $entry = $counters[$ip] ?? null;
+
+            if (!$entry) {
+                return 0;
+            }
+
+            $window = $this->pickCounterWindow($entry, $sinceTimestamp);
+            if ($window !== null) {
+                return (int)($window['bytes'] ?? 0);
+            }
+
+            return $this->scanImagesForBandwidth($ip, $sinceTimestamp);
+        } catch (Throwable $e) {
+            error_log('AbuseGuard: getUploadBandwidth failed - ' . $e->getMessage());
+            return $this->scanImagesForBandwidth($ip, $sinceTimestamp);
+        }
+    }
+
+    /**
+     * Pilih window counter yang valid untuk timestamp since.
+     * Return null bila since bukan jendela 1 jam/24 jam atau window basi.
+     */
+    private function pickCounterWindow(array $entry, int $sinceTimestamp): ?array
+    {
+        $now = time();
+
+        if ($sinceTimestamp >= $now - 3600) {
+            $hour = $entry['hour'] ?? null;
+            if ($hour && ($hour['ts'] ?? 0) >= $sinceTimestamp) {
+                return $hour;
+            }
+            return null;
+        }
+
+        if ($sinceTimestamp >= $now - 86400) {
+            $day = $entry['day'] ?? null;
+            if ($day && ($day['ts'] ?? 0) >= $sinceTimestamp) {
+                return $day;
+            }
+            return null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Full-scan fallback (images.json) untuk jendela > 1 jam.
+     */
+    private function scanImagesForCount(string $ip, int $sinceTimestamp): int
+    {
         $imagesFile = __DIR__ . '/../data/images.json';
         if (!file_exists($imagesFile)) {
             return 0;
         }
 
         $images = json_decode(file_get_contents($imagesFile), true) ?: [];
-        $sinceTimestamp = strtotime($since);
         $count = 0;
 
         foreach ($images as $img) {
@@ -289,11 +425,8 @@ class AbuseGuard
 
         return $count;
     }
-    
-    /**
-     * Get upload bandwidth (total bytes) for IP in time period
-     */
-    private function getUploadBandwidth(string $ip, string $since): int
+
+    private function scanImagesForBandwidth(string $ip, int $sinceTimestamp): int
     {
         $imagesFile = __DIR__ . '/../data/images.json';
         if (!file_exists($imagesFile)) {
@@ -301,7 +434,6 @@ class AbuseGuard
         }
 
         $images = json_decode(file_get_contents($imagesFile), true) ?: [];
-        $sinceTimestamp = strtotime($since);
         $totalBytes = 0;
 
         foreach ($images as $img) {
@@ -339,9 +471,11 @@ class AbuseGuard
 
         $images = json_decode(file_get_contents($imagesFile), true) ?: [];
         $since24h = strtotime('-24 hours');
+        $since1h = strtotime('-1 hour');
 
 
         $ipStats = [];
+        $hourlyCounts = [];
         foreach ($images as $img) {
             $ip = $img['ip'] ?? 'unknown';
             $createdAt = $img['created_at'] ?? 0;
@@ -363,15 +497,19 @@ class AbuseGuard
                     $ipStats[$ip]['user_ids'][] = $img['user_id'];
                     $ipStats[$ip]['is_guest'] = false;
                 }
+
+                if ($createdAt >= $since1h) {
+                    $hourlyCounts[$ip] = ($hourlyCounts[$ip] ?? 0) + 1;
+                }
             }
         }
 
         $report['scanned'] = count($ipStats);
 
 
-        $hourlyThreshold = (int) $this->getSetting('abuse_threshold_uploads_per_hour', 50);
-        $dailyThreshold = (int) $this->getSetting('abuse_threshold_uploads_per_day', 200);
-        $autoBlockEnabled = (bool) $this->getSetting('abuse_auto_block_enabled', 1);
+        $hourlyThreshold = (int) $this->getSetting('abuse_threshold_uploads_per_hour');
+        $dailyThreshold = (int) $this->getSetting('abuse_threshold_uploads_per_day');
+        $autoBlockEnabled = (bool) $this->getSetting('abuse_auto_block_enabled');
 
         foreach ($ipStats as $ip => $stats) {
             if ($ip === 'unknown') continue;
@@ -383,15 +521,17 @@ class AbuseGuard
             $reasons = [];
 
 
+            $hourlyCount = $hourlyCounts[$ip] ?? 0;
+
             if ($stats['count'] >= $dailyThreshold) {
                 $suspicionLevel = 3;
                 $reasons[] = "Daily uploads ({$stats['count']}) exceeded threshold ({$dailyThreshold})";
             } elseif ($stats['count'] >= $dailyThreshold * 0.75) {
                 $suspicionLevel = max($suspicionLevel, 2);
                 $reasons[] = "Daily uploads ({$stats['count']}) approaching threshold";
-            } elseif ($stats['count'] >= $hourlyThreshold) {
+            } elseif ($hourlyCount >= $hourlyThreshold) {
                 $suspicionLevel = max($suspicionLevel, 1);
-                $reasons[] = "High upload activity ({$stats['count']} in 24h)";
+                $reasons[] = "Hourly uploads ({$hourlyCount}) exceeded threshold ({$hourlyThreshold})";
             }
 
 

@@ -2,6 +2,11 @@
 -- User Status Migration
 -- Add account status columns for lock/suspend/warning
 -- Run: mysql -u root -p pixelhop < database/user_status_migration.sql
+--
+-- DEPRECATED (2026-09-10): isi migrasi ini sudah terserap ke dalam
+-- database/schema.sql canonical (disinkronkan dari produksi).
+-- Jangan jalankan di database baru/produksi; pertahankan file hanya
+-- untuk referensi historis.
 -- ================================
 
 -- Add status column: active, locked, suspended

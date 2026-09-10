@@ -8,6 +8,11 @@
  * 
  * Run: crontab -e
  * 0 2 * * * php /var/www/pichost/cron/image_expiration.php >> /var/log/pichost/expiration.log 2>&1
+ *
+ * D4-01/D4-02/D4-07: semua mutasi images.json memakai JsonStore RMW
+ * (flock + temp file + rename). Metadata TIDAK pernah dihapus sebelum semua
+ * delete S3 sukses. Bila delete S3 gagal, penanda `deleting_at` dilepas dan
+ * `last_delete_error` dicatat supaya retry otomatis pada run berikutnya.
  */
 
 // CLI only
@@ -24,17 +29,28 @@ $config = require ROOT_PATH . '/config/s3.php';
 require_once ROOT_PATH . '/includes/R2StorageManager.php';
 $r2 = new R2StorageManager($config);
 
+// Load JsonStore for atomic RMW access to images.json (D2-05, D4-07)
+require_once ROOT_PATH . '/includes/JsonStore.php';
+
 $dataFile = ROOT_PATH . '/data/images.json';
 $logFile = ROOT_PATH . '/data/expiration_log.json';
 
+$store = new JsonStore($dataFile);
+$logStore = new JsonStore($logFile);
+
 echo "[" . date('Y-m-d H:i:s') . "] Starting image expiration check...\n";
 
-// Load images
-if (!file_exists($dataFile)) {
+// D4-07: backup sebelum modifikasi apa pun. Tidak ada backup bila file tidak ada.
+$backupPath = $store->backup(10);
+if ($backupPath !== null) {
+    echo "Backup created: {$backupPath}\n";
+}
+
+if (!is_file($dataFile)) {
     die("Error: images.json not found\n");
 }
 
-$images = json_decode(file_get_contents($dataFile), true);
+$images = $store->read();
 if (!is_array($images)) {
     die("Error: Invalid images.json format\n");
 }
@@ -52,30 +68,33 @@ $stats = [
     'still_active' => 0
 ];
 
-$toDelete = [];
-$modified = false;
+// Tahap 1 (seleksi, read-only): kumpulkan kandidat delete dan kandidat mark
+// tanpa memegang lock. Mutasi aktual dilakukan per-item di tahap 2 via
+// JsonStore::mutate() sehingga tidak ada baca-penuh-lalu-timpa.
+$deleteCandidates = [];
+$markCandidates = [];
 
 foreach ($images as $imageId => $image) {
     $stats['checked']++;
-    
+
     // Skip user-owned images (registered users)
     if (!empty($image['user_id'])) {
         $stats['skipped_user_owned']++;
         continue;
     }
-    
+
     // Get the last viewed timestamp (or fall back to created_at)
     $lastViewed = $image['last_viewed_at'] ?? $image['created_at'] ?? 0;
     $daysSinceView = ($now - $lastViewed) / (24 * 60 * 60);
-    
+
     // Check if already marked for deletion
     if (isset($image['marked_for_deletion'])) {
         $markedAt = $image['marked_for_deletion'];
         $daysSinceMarked = ($now - $markedAt) / (24 * 60 * 60);
-        
+
         // If 30 more days have passed since marking (90 days total without view), delete
         if ($daysSinceMarked >= 30) {
-            $toDelete[] = $imageId;
+            $deleteCandidates[$imageId] = $image;
             echo "  [DELETE] {$imageId} - No views for 90+ days (marked " . round($daysSinceMarked) . " days ago)\n";
         } else {
             echo "  [PENDING] {$imageId} - Marked for deletion, " . round($daysSinceMarked, 1) . " days ago (will delete in " . round(30 - $daysSinceMarked) . " days)\n";
@@ -83,10 +102,7 @@ foreach ($images as $imageId => $image) {
     } else {
         // Not yet marked - check if it's been 60 days without a view
         if ($daysSinceView >= 60) {
-            // Mark for deletion
-            $images[$imageId]['marked_for_deletion'] = $now;
-            $modified = true;
-            $stats['marked_for_deletion']++;
+            $markCandidates[$imageId] = $image;
             echo "  [MARKED] {$imageId} - No views for " . round($daysSinceView) . " days, marked for deletion (will delete in 30 days)\n";
         } else {
             $stats['still_active']++;
@@ -94,73 +110,132 @@ foreach ($images as $imageId => $image) {
     }
 }
 
-// Delete marked images that have exceeded the grace period
-foreach ($toDelete as $imageId) {
-    $image = $images[$imageId] ?? null;
-    if (!$image) continue;
-    
-    $deleteSuccess = true;
-    $s3Keys = $image['s3_keys'] ?? [];
-    $storageProviders = $image['storage_providers'] ?? [];
-    
-    // Delete from storage
-    foreach ($s3Keys as $sizeType => $s3Key) {
-        $provider = $storageProviders[$sizeType] ?? 'contabo';
-        
-        try {
-            if ($provider === 'r2') {
-                $result = $r2->deleteFromR2($s3Key);
-            } else {
-                $result = $r2->deleteFromContabo($s3Key);
+// Tahap 2a (mark): tandai kandidat via JsonStore::mutate() satu per satu.
+foreach ($markCandidates as $imageId => $image) {
+    try {
+        $store->mutate(function (array $data) use ($imageId, $now): array {
+            if (isset($data[$imageId]) && empty($data[$imageId]['user_id'])) {
+                $data[$imageId]['marked_for_deletion'] = $now;
             }
-            
-            if ($result['success']) {
-                echo "    Deleted {$sizeType} from {$provider}: {$s3Key}\n";
-            } else {
-                echo "    Warning: Failed to delete {$sizeType} from {$provider}: {$s3Key} - " . ($result['error'] ?? 'Unknown error') . "\n";
+            return $data;
+        });
+        $stats['marked_for_deletion']++;
+    } catch (Exception $e) {
+        echo "  [MARK ERROR] {$imageId}: " . $e->getMessage() . "\n";
+    }
+}
+
+// Tahap 2b (delete): per image, tandai dulu `deleting_at` (dalam lock),
+// lepas lock, hapus S3 (network di luar lock), lalu mutate lagi untuk unset
+// HANYA bila semua delete S3 sukses. Gagal => hapus `deleting_at` dan catat
+// `last_delete_error`; metadata tetap utuh untuk retry run berikutnya.
+foreach ($deleteCandidates as $imageId => $image) {
+    // Tandai di dalam lock agar run lain tidak memproses item yang sama.
+    $claimed = false;
+    try {
+        $store->mutate(function (array $data) use ($imageId, $now, &$claimed): array {
+            if (!isset($data[$imageId])) {
+                return $data;
             }
-        } catch (Exception $e) {
-            echo "    Error deleting {$sizeType}: " . $e->getMessage() . "\n";
-            $deleteSuccess = false;
+
+            // Sudah ditandai proses oleh proses lain dan belum basi.
+            if (!empty($data[$imageId]['deleting_at']) && ($now - (int)$data[$imageId]['deleting_at']) < 3600) {
+                return $data;
+            }
+
+            $data[$imageId]['deleting_at'] = $now;
+            $claimed = true;
+            return $data;
+        });
+
+        // Pastikan marker dipasang oleh proses ini sebelum delete S3 dimulai.
+        if (!$claimed) {
+            echo "  [SKIP] {$imageId} - already being deleted by another process\n";
+            continue;
         }
-    }
-    
-    // Remove from images.json
-    if ($deleteSuccess) {
-        unset($images[$imageId]);
-        $modified = true;
-        $stats['deleted']++;
-        echo "  [REMOVED] {$imageId} from database\n";
-    } else {
+    } catch (Exception $e) {
+        echo "  [DELETE MARK ERROR] {$imageId}: " . $e->getMessage() . "\n";
         $stats['deletion_errors']++;
+        continue;
     }
-}
 
-// Save modified images.json
-if ($modified) {
-    $result = file_put_contents($dataFile, json_encode($images, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), LOCK_EX);
-    if ($result) {
-        echo "\nSaved changes to images.json\n";
+    $s3Keys = $image['s3_keys'] ?? [];
+    $imageSize = (int)($image['size'] ?? 0);
+
+    // D4-03: estimasi ukuran per varian dipakai deleteImage() untuk akuntansi
+    // storage_stats yang akurat. deleteImage() juga fallback ke estimasi ini.
+    $s3Sizes = R2StorageManager::estimateVariantSizes($imageSize);
+
+    // Network delete DI LUAR lock.
+    $deleteResult = ['success' => true, 'deleted' => 0, 'details' => []];
+    try {
+        if (empty($s3Keys)) {
+            $deleteResult = ['success' => true, 'deleted' => 0, 'details' => []];
+        } else {
+            $deleteResult = $r2->deleteImage($s3Keys, $imageSize, $s3Sizes);
+        }
+    } catch (Exception $e) {
+        $deleteResult = [
+            'success' => false,
+            'deleted' => 0,
+            'details' => ['error' => $e->getMessage()],
+        ];
+    }
+
+    $allS3Succeeded = !empty($deleteResult['success']) && ($deleteResult['deleted'] ?? 0) >= count(array_filter($s3Keys));
+
+    if ($allS3Succeeded) {
+        // Semua delete S3 sukses: metadata boleh dihapus.
+        try {
+            $store->mutate(function (array $data) use ($imageId): array {
+                unset($data[$imageId]);
+                return $data;
+            });
+            $stats['deleted']++;
+            echo "  [REMOVED] {$imageId} from database\n";
+        } catch (Exception $e) {
+            echo "  [METADATA ERROR] {$imageId}: " . $e->getMessage() . "\n";
+            $stats['deletion_errors']++;
+        }
     } else {
-        echo "\nError: Failed to save images.json\n";
+        // S3 gagal sebagian/seluruhnya: metadata TIDAK dihapus (D4-02).
+        // Lepas marker `deleting_at` agar bisa diretried dan catat error.
+        $errorMessage = 'S3 delete failed: ' . json_encode($deleteResult['details'] ?? []);
+        try {
+            $store->mutate(function (array $data) use ($imageId, $now, $errorMessage): array {
+                if (isset($data[$imageId])) {
+                    unset($data[$imageId]['deleting_at']);
+                    $data[$imageId]['last_delete_error'] = [
+                        'timestamp' => $now,
+                        'message' => substr($errorMessage, 0, 500),
+                    ];
+                }
+                return $data;
+            });
+        } catch (Exception $e) {
+            echo "  [ERROR LOG ERROR] {$imageId}: " . $e->getMessage() . "\n";
+        }
+        $stats['deletion_errors']++;
+        echo "  [DELETE ERROR] {$imageId}: metadata retained, will retry next run (" . substr($errorMessage, 0, 160) . ")\n";
     }
 }
 
-// Save log
+// Save log via JsonStore RMW (pertahankan format array per entri).
 $log = [
     'timestamp' => date('Y-m-d H:i:s'),
-    'stats' => $stats
+    'stats' => $stats,
 ];
 
-$logs = [];
-if (file_exists($logFile)) {
-    $logs = json_decode(file_get_contents($logFile), true) ?: [];
-}
-$logs[] = $log;
+try {
+    $logStore->mutate(function (array $logs) use ($log): array {
+        $logs[] = $log;
 
-// Keep only last 30 days of logs
-$logs = array_slice($logs, -30);
-file_put_contents($logFile, json_encode($logs, JSON_PRETTY_PRINT), LOCK_EX);
+        // Keep only last 30 days of logs
+        return array_slice($logs, -30);
+    });
+} catch (Exception $e) {
+    echo "  [LOG ERROR] " . $e->getMessage() . "\n";
+}
 
 echo "\n=== Summary ===\n";
 echo "Checked: {$stats['checked']}\n";

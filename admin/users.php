@@ -35,7 +35,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             $block = (int) ($_POST['block'] ?? 0);
             if ($userId > 0 && $userId !== $currentUser['id']) {
                 $stmt = $db->prepare("UPDATE users SET is_blocked = ? WHERE id = ?");
-                $stmt->execute([$block, $userId]);
+                if ($stmt->execute([$block, $userId])) {
+                    incrementSessionVersion($userId);
+                }
                 echo json_encode(['success' => true]);
             } else {
                 echo json_encode(['error' => 'Cannot modify this user']);
@@ -47,7 +49,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             $role = $_POST['role'] ?? 'user';
             if ($userId > 0 && $userId !== $currentUser['id'] && in_array($role, ['user', 'admin'])) {
                 $stmt = $db->prepare("UPDATE users SET role = ? WHERE id = ?");
-                $stmt->execute([$role, $userId]);
+                if ($stmt->execute([$role, $userId])) {
+                    incrementSessionVersion($userId);
+                }
                 echo json_encode(['success' => true]);
             } else {
                 echo json_encode(['error' => 'Cannot modify this user']);
@@ -59,7 +63,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             $type = $_POST['type'] ?? 'free';
             if ($userId > 0 && in_array($type, ['free', 'premium'])) {
                 $stmt = $db->prepare("UPDATE users SET account_type = ? WHERE id = ?");
-                $stmt->execute([$type, $userId]);
+                if ($stmt->execute([$type, $userId])) {
+                    incrementSessionVersion($userId);
+                }
                 echo json_encode(['success' => true]);
             } else {
                 echo json_encode(['error' => 'Invalid account type']);
@@ -69,6 +75,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
         case 'delete_user':
             $userId = (int) ($_POST['user_id'] ?? 0);
             if ($userId > 0 && $userId !== $currentUser['id']) {
+                // Naikkan session_version sebelum delete agar sesi target mati
+                // secepatnya; bila user sempat request lagi sebelum delete,
+                // middleware akan melihat versi yang tidak cocok.
+                incrementSessionVersion($userId);
                 $stmt = $db->prepare("DELETE FROM users WHERE id = ?");
                 $stmt->execute([$userId]);
                 echo json_encode(['success' => true]);
@@ -96,7 +106,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                     status_updated_by = ?,
                     suspend_until = ?
                     WHERE id = ?");
-                $stmt->execute([$status, $reason, $currentUser['id'], $suspendUntil, $userId]);
+                if ($stmt->execute([$status, $reason, $currentUser['id'], $suspendUntil, $userId])) {
+                    incrementSessionVersion($userId);
+                }
                 echo json_encode(['success' => true]);
             } else {
                 echo json_encode(['error' => 'Cannot modify this user']);

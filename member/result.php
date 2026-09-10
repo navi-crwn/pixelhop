@@ -18,7 +18,16 @@ if (!isAuthenticated()) {
 $currentUser = getCurrentUser();
 $type = $_GET['type'] ?? 'upload';
 $count = (int)($_GET['count'] ?? 0);
+
+// Whitelist the requested tool. $tool is reflected into the <title>, the page
+// heading and the JS download filename, so anything outside the known tool set
+// is discarded instead of being echoed back (reflected XSS).
 $tool = $_GET['tool'] ?? '';
+$allowedTools = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg'];
+if ($tool !== '' && !in_array($tool, $allowedTools, true)) {
+    $tool = '';
+}
+
 $isToolResult = ($type === 'tool' || !empty($tool));
 
 $csrfToken = generateCsrfToken();

@@ -85,6 +85,7 @@ $siteName = $config['site']['name'];
                     <li>Image metadata (dimensions, file size, format)</li>
                     <li>View counts and last viewed timestamps (for analytics)</li>
                 </ul>
+                <p>IP addresses used for rate limiting and abuse prevention are kept only as long as needed for that purpose: request-tracking records (<code>ip_requests</code>) are pruned after about 1 hour, security event records (<code>security_events</code>) are retained for up to 30 days, and image records that reference an IP are kept only for as long as the image itself exists.</p>
 
                 <h2>2. How We Use Information</h2>
                 <p>We use collected information to:</p>
@@ -130,7 +131,8 @@ $siteName = $config['site']['name'];
                 <p>Images are stored on secure cloud infrastructure. We implement industry-standard security measures to protect your data.</p>
 
                 <h2>5. Data Retention</h2>
-                <p>Uploaded images are retained indefinitely unless:</p>
+                <p>Guest (unregistered) uploads are automatically removed when they are no longer active: an image that has not been viewed for 60 days is marked for deletion, and if it remains unviewed for another 30 days (90 days total), it is permanently deleted from storage. Images owned by registered accounts are not subject to this inactivity cleanup and are retained for as long as the account exists.</p>
+                <p>Images may also be removed earlier if:</p>
                 <ul>
                     <li>You request deletion</li>
                     <li>The content violates our Terms of Service</li>

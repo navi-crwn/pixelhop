@@ -24,6 +24,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     jsonError('Method not allowed', 405);
 }
 
+// Session bootstrap (secure cookie params + periodic session ID regeneration)
+require_once __DIR__ . '/../includes/bootstrap.php';
+
 // Security Firewall Check
 require_once __DIR__ . '/../includes/SecurityFirewall.php';
 $firewall = new SecurityFirewall();
@@ -35,6 +38,7 @@ if (!$firewallCheck['allowed']) {
 require_once __DIR__ . '/../includes/ImageHandler.php';
 require_once __DIR__ . '/../includes/AiService.php';
 require_once __DIR__ . '/../includes/RateLimiter.php';
+require_once __DIR__ . '/../includes/ClientIp.php';
 require_once __DIR__ . '/../auth/middleware.php';
 require_once __DIR__ . '/../core/Gatekeeper.php';
 
@@ -63,33 +67,53 @@ if (!isAuthenticated()) {
     jsonError('Please login to use AI-powered background removal. It\'s free!', 401);
 }
 
-// Quota enforcement
+// Quota enforcement (atomic claim)
 $currentUser = getCurrentUser();
 $isPremium = ($currentUser['account_type'] ?? 'free') === 'premium';
 $isUserAdmin = ($currentUser['role'] ?? '') === 'admin';
+$userId = getCurrentUserId();
+
+$usageClaimId = null;
 
 if (!$isUserAdmin) {
-    require_once __DIR__ . '/../includes/Database.php';
     $db = Database::getInstance();
-
-
     $rembgLimit = (int)$gatekeeper->getSetting($isPremium ? 'daily_removebg_limit_premium' : 'daily_removebg_limit_free', $isPremium ? 30 : 3);
 
+    // D5-14: single atomic statement. INSERT succeeds only when the user is
+    // still under their daily limit, so concurrent requests cannot all pass
+    // the old SELECT COUNT(*) check before any of them records usage.
+    // usage_logs.status enum has no 'processing'; claim starts as 'failed'
+    // and is flipped to 'success' on completion or DELETEd as a refund.
+    $claimStmt = $db->prepare("
+        INSERT INTO usage_logs (user_id, tool_name, status, ip_address, created_at)
+        SELECT ?, 'rembg', 'failed', ?, NOW()
+        FROM DUAL
+        WHERE (SELECT COUNT(*) FROM usage_logs
+               WHERE user_id = ? AND tool_name = 'rembg' AND DATE(created_at) = CURDATE()) < ?
+    ");
+    $claimStmt->execute([$userId, ClientIp::get(), $userId, $rembgLimit]);
 
-    $today = date('Y-m-d');
-    $usageStmt = $db->prepare("SELECT COUNT(*) FROM usage_logs WHERE user_id = ? AND tool_name = 'rembg' AND DATE(created_at) = ?");
-    $usageStmt->execute([getCurrentUserId(), $today]);
-    $usedToday = (int)$usageStmt->fetchColumn();
-
-    if ($usedToday >= $rembgLimit) {
-        jsonError('Daily quota exceeded. You have used ' . $usedToday . '/' . $rembgLimit . ' Remove BG operations today. ' . ($isPremium ? '' : 'Upgrade to Premium for 30 uses/day!'), 429);
+    if ($claimStmt->rowCount() === 0) {
+        jsonError('Daily quota exceeded. You have reached your ' . $rembgLimit . ' Remove BG operations limit for today. ' . ($isPremium ? '' : 'Upgrade to Premium for 30 uses/day!'), 429);
     }
+
+    $usageClaimId = (int)$db->lastInsertId();
+}
+
+// Heavy-tool gate (D5-16): CPU load + concurrency protection before launching Python
+$heavy = $gatekeeper->canRunHeavyTool('rembg', $userId ?: null);
+if (!($heavy['allowed'] ?? true)) {
+    if ($usageClaimId !== null) {
+        $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
+        $refundStmt->execute([$usageClaimId]);
+    }
+    jsonError($heavy['reason'] ?? 'Server busy, please try again later.', 503);
 }
 
 // Rate limiting
 $rateLimiter = new RateLimiter();
-$rateLimiter->enforce(getCurrentUserId());
-$rateLimiter->addHeaders(getCurrentUserId());
+$rateLimiter->enforce($userId);
+$rateLimiter->addHeaders($userId);
 
 try {
     $handler = new ImageHandler();
@@ -116,11 +140,16 @@ try {
 
 
     if (!$result['success']) {
+        // Refund the atomic claim so a failed attempt does not consume quota.
+        if ($usageClaimId !== null) {
+            $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
+            $refundStmt->execute([$usageClaimId]);
+        }
         $code = $result['code'] ?? 500;
         http_response_code($code);
         echo json_encode([
             'success' => false,
-            'error' => $result['error'],
+            'error' => 'Background removal failed. Please try again.',
             'load_info' => $aiService->getLoadInfo(),
         ]);
         exit;
@@ -128,6 +157,10 @@ try {
 
 
     if (!file_exists($result['output_path'])) {
+        if ($usageClaimId !== null) {
+            $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
+            $refundStmt->execute([$usageClaimId]);
+        }
         jsonError('Output file not generated', 500);
     }
 
@@ -149,10 +182,17 @@ try {
 
 
     $processingTimeMs = $result['duration_ms'] ?? 0;
+
+    if ($usageClaimId !== null) {
+        // Mark the claim as a completed, successful audit record.
+        $finalizeStmt = $db->prepare("UPDATE usage_logs SET status = 'success', file_size = ?, processing_time_ms = ? WHERE id = ?");
+        $finalizeStmt->execute([$imageData['size'], $processingTimeMs, $usageClaimId]);
+    }
+
     $gatekeeper->recordToolUsage('rembg', getCurrentUserId() ?? 0, $imageData['size'], $processingTimeMs, 'success');
 
     if ($returnType === 'json') {
-        echo json_encode([
+        $payload = [
             'success' => true,
             'original_size' => $result['input_size'],
             'new_size' => $outputSize,
@@ -160,10 +200,20 @@ try {
             'height' => $result['height'],
             'model' => $model,
             'duration_ms' => $result['duration_ms'],
-            'data' => 'data:image/png;base64,' . base64_encode($outputData),
             'view_url' => $viewUrl,
             'filename' => $downloadName,
-        ]);
+        ];
+
+        // D5-21: never base64 the whole PNG by default. Keep memory bounded by
+        // only attaching inline data when explicitly requested AND <= 3MB.
+        if (($_POST['include_data'] ?? '') === '1') {
+            if ($outputSize > 3 * 1024 * 1024) {
+                jsonError('Output is too large to inline (' . round($outputSize / 1024 / 1024, 1) . ' MB). Use the view_url instead.', 413);
+            }
+            $payload['data'] = 'data:image/png;base64,' . base64_encode($outputData);
+        }
+
+        echo json_encode($payload);
     } else {
         header('Content-Type: image/png');
         header('Content-Disposition: attachment; filename="' . $downloadName . '"');
@@ -174,10 +224,19 @@ try {
     }
 
 } catch (InvalidArgumentException $e) {
-    jsonError($e->getMessage(), 400);
+    if ($usageClaimId !== null) {
+        $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
+        $refundStmt->execute([$usageClaimId]);
+    }
+    error_log('Rembg error (InvalidArgumentException): ' . $e->getMessage());
+    jsonError('Invalid input.', 400);
 } catch (Exception $e) {
+    if ($usageClaimId !== null) {
+        $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
+        $refundStmt->execute([$usageClaimId]);
+    }
     error_log('Rembg error: ' . $e->getMessage());
-    jsonError('Background removal failed: ' . $e->getMessage(), 500);
+    jsonError('Background removal failed. Please try again later.', 500);
 }
 
 /**

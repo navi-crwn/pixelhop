@@ -76,7 +76,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             ]);
 
             $stmt = $db->prepare("UPDATE users SET password_hash = ? WHERE id = ?");
-            $stmt->execute([$hash, $user['id']]);
+            if ($stmt->execute([$hash, $user['id']])) {
+                // Matikan semua sesi lain milik user ini.
+                incrementSessionVersion($user['id']);
+
+                // Sesi yang sedang dipakai tetap valid: samakan key sesi
+                // dengan nilai DB terbaru agar tidak ikut ter-logout.
+                $_SESSION['session_version'] = (int) ($_SESSION['session_version'] ?? 1) + 1;
+            }
 
             echo json_encode(['success' => true, 'message' => 'Password updated successfully']);
             break;

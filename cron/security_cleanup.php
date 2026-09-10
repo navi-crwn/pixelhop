@@ -4,6 +4,18 @@
  * Run every hour: 0 * * * * php /var/www/pichost/cron/security_cleanup.php
  */
 
+// D3-10: CLI boleh jalan tanpa key. Akses HTTP wajib menyertakan cron_key
+// yang cocok dengan environment variable CRON_KEY.
+if (php_sapi_name() !== 'cli') {
+    $expectedKey = getenv('CRON_KEY') ?: '';
+    $providedKey = $_GET['cron_key'] ?? '';
+
+    if ($expectedKey === '' || !is_string($providedKey) || !hash_equals($expectedKey, $providedKey)) {
+        http_response_code(403);
+        die('Forbidden');
+    }
+}
+
 require_once __DIR__ . '/../includes/SecurityFirewall.php';
 require_once __DIR__ . '/../includes/R2RateLimiter.php';
 

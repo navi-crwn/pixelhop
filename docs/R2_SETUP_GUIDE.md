@@ -61,13 +61,13 @@
 
 ## Step 4: Update Config
 
-Edit file `/var/www/pichost/config/s3.php`:
+Edit file `/var/www/pixelhop/config/s3.php`:
 
 ```php
 'r2' => [
     'enabled' => true,  // ← Ubah ke true
-    'account_id' => '5b438d3808a610e4d61a073fafc34dc4',
-    'endpoint' => 'https://5b438d3808a610e4d61a073fafc34dc4.r2.cloudflarestorage.com',
+    'account_id' => 'YOUR_ACCOUNT_ID',
+    'endpoint' => 'https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com',
     'region' => 'auto',
     'bucket' => 'pichost-thumbs',
     'access_key' => 'YOUR_ACCESS_KEY_ID',      // ← Paste dari Step 3

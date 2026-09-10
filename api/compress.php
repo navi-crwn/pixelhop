@@ -38,6 +38,7 @@ require_once __DIR__ . '/../includes/ImageHandler.php';
 require_once __DIR__ . '/../includes/RateLimiter.php';
 require_once __DIR__ . '/../auth/middleware.php';
 require_once __DIR__ . '/../core/Gatekeeper.php';
+require_once __DIR__ . '/../includes/Logger.php';
 
 // Check if tool is disabled
 $gatekeeper = new Gatekeeper();
@@ -113,6 +114,10 @@ try {
             $targetFormat = 'jpeg';
         }
     } catch (Exception $e) {
+        Logger::warning('compress', 'Format probe failed, falling back to jpeg', [
+            'code' => 0,
+            'exception' => get_class($e),
+        ]);
         $targetFormat = 'jpeg';
     }
 
@@ -152,7 +157,10 @@ try {
     try {
         $imagick->setImageFormat($targetFormat);
     } catch (ImagickException $e) {
-
+        Logger::warning('compress', 'setImageFormat failed, falling back to jpeg', [
+            'code' => 0,
+            'exception' => get_class($e),
+        ]);
         $targetFormat = 'jpeg';
         $imagick->setImageFormat('jpeg');
     }
@@ -232,10 +240,13 @@ try {
     }
 
 } catch (InvalidArgumentException $e) {
-    jsonError($e->getMessage(), 400);
+    // Detail validasi HANYA ke log server; klien menerima pesan generik.
+    Logger::error('compress', $e->getMessage(), ['code' => 400, 'exception' => get_class($e)]);
+    jsonError('Invalid image or parameters. Please check your input and try again.', 400);
 } catch (Exception $e) {
-    error_log('Compress error: ' . $e->getMessage());
-    jsonError('Processing failed: ' . $e->getMessage(), 500);
+    // Detail internal (Imagick/path/S3) HANYA ke log server, tidak ke klien.
+    Logger::error('compress', $e->getMessage(), ['code' => 500, 'exception' => get_class($e)]);
+    jsonError('Processing failed. Please try again.', 500);
 }
 
 /**

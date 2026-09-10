@@ -30,8 +30,9 @@ class Turnstile
             $loaded = is_file($configFile) ? require $configFile : [];
 
             self::$config = [
-                'site_key'   => $loaded['site_key']   ?? getenv('TURNSTILE_SITE_KEY')   ?: '',
-                'secret_key' => $loaded['secret_key'] ?? getenv('TURNSTILE_SECRET_KEY') ?: '',
+                'site_key'         => $loaded['site_key']         ?? getenv('TURNSTILE_SITE_KEY')   ?: '',
+                'secret_key'       => $loaded['secret_key']       ?? getenv('TURNSTILE_SECRET_KEY') ?: '',
+                'allowed_hostnames' => $loaded['allowed_hostnames'] ?? [],
             ];
         }
 
@@ -66,9 +67,17 @@ class Turnstile
     {
 
         if (!self::isConfigured()) {
+            // Fail closed. Dev/test environments may explicitly opt out.
+            if (getenv('TURNSTILE_ALLOW_UNCONFIGURED') === '1') {
+                return [
+                    'success' => true,
+                    'message' => 'Turnstile bypassed (TURNSTILE_ALLOW_UNCONFIGURED=1)',
+                ];
+            }
+
             return [
-                'success' => true,
-                'message' => 'Turnstile not configured (development mode)',
+                'success' => false,
+                'message' => 'Captcha service is not configured',
             ];
         }
 
@@ -133,11 +142,51 @@ class Turnstile
             ];
         }
 
+        // Verify that the challenge was solved for an allowed hostname.
+        if (self::isHostnameMismatch($result['hostname'] ?? '')) {
+            error_log('Turnstile hostname mismatch: ' . ($result['hostname'] ?? ''));
+            return [
+                'success' => false,
+                'message' => 'Captcha hostname mismatch',
+            ];
+        }
+
         return [
             'success' => true,
             'message' => 'Verification successful',
             'hostname' => $result['hostname'] ?? null,
         ];
+    }
+
+    /**
+     * Check the hostname returned by Cloudflare against the configured
+     * allow-list. When no allow-list is configured, fall back to the current
+     * request's HTTP_HOST.
+     */
+    private static function isHostnameMismatch(string $hostname): bool
+    {
+        if ($hostname === '') {
+            // Cloudflare does not always return a hostname for all
+            // verification modes; only enforce it when one is present.
+            return false;
+        }
+
+        $allowed = self::config()['allowed_hostnames'] ?? [];
+        if (!is_array($allowed)) {
+            $allowed = [];
+        }
+
+        if (!empty($allowed)) {
+            foreach ($allowed as $allowedHost) {
+                if (hash_equals($allowedHost, $hostname)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        $httpHost = $_SERVER['HTTP_HOST'] ?? '';
+        return $httpHost === '' ? false : !hash_equals($httpHost, $hostname);
     }
 
     /**

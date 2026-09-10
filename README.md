@@ -35,7 +35,7 @@ No desktop software needed. Works entirely in the browser.
 - **Compress** — Reduce file size while maintaining quality
 - **Resize & Crop** — Adjust dimensions with preset ratios (1:1, 4:3, 16:9) or custom
 - **Convert** — Switch formats: JPEG ↔ PNG ↔ WebP ↔ GIF ↔ BMP
-- **OCR** — Extract text from images using Tesseract
+- **OCR** — Extract text from images using PaddleOCR
 - **Remove Background** — AI-powered background removal
 - **User Accounts** — Google OAuth login with personal dashboard
 - **Admin Panel** — Full control, monitoring, and abuse prevention
@@ -63,7 +63,7 @@ User accounts for tracking uploads and managing AI tool access:
 ```
 Backend     : PHP 8.1+, MySQL/MariaDB
 Frontend    : TailwindCSS, Vanilla JS, Lucide Icons
-AI/Python   : Tesseract OCR, rembg (background removal)
+AI/Python   : PaddleOCR, rembg (background removal)
 Storage     : S3-compatible (AWS, MinIO, Contabo, etc.)
 Auth        : Google OAuth 2.0, Cloudflare Turnstile
 ```

@@ -6,35 +6,121 @@
  * Usage: require_once __DIR__ . '/auth/middleware.php';
  */
 
-// Start secure session if not started
-if (session_status() === PHP_SESSION_NONE) {
-    session_set_cookie_params([
-        'lifetime' => 86400 * 7,
-        'path' => '/',
-        'domain' => '',
-        'secure' => isset($_SERVER['HTTPS']),
-        'httponly' => true,
-        'samesite' => 'Lax'
-    ]);
-    session_start();
-}
-
-// Session regeneration for security (every 30 min)
-if (!isset($_SESSION['last_regeneration'])) {
-    $_SESSION['last_regeneration'] = time();
-} elseif (time() - $_SESSION['last_regeneration'] > 1800) {
-    session_regenerate_id(true);
-    $_SESSION['last_regeneration'] = time();
-}
+// Mulai sesi aman + regenerasi ID berkala via bootstrap.
+// bootstrap.php menangani session_start, cookie parameter, dan regenerasi sesi.
+require_once __DIR__ . '/../includes/bootstrap.php';
 
 /**
  * Check if user is authenticated
+ *
+ * Catatan D1-01: fungsi ini sengaja memanggil enforceAccountStatus() secara
+ * lazy agar setiap pengecekan autentikasi ikut memvalidasi status akun &
+ * session_version di DB. Pemanggilan dibatasi 1x per request lewat static
+ * flag, dan kegagalan DB ditangkap agar middleware tidak berubah menjadi
+ * self-DoS (lihat komentar di enforceAccountStatus).
  */
 function isAuthenticated(): bool
 {
-    return isset($_SESSION['user_id']) &&
-           isset($_SESSION['user_email']) &&
-           !empty($_SESSION['user_id']);
+    static $checked = false;
+
+    if (isset($_SESSION['user_id']) &&
+        isset($_SESSION['user_email']) &&
+        !empty($_SESSION['user_id'])) {
+        if (!$checked) {
+            $checked = true;
+            enforceAccountStatus();
+        }
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Validasi status akun & session_version terhadap DB pada tiap request.
+ *
+ * Tujuan (D1-01): sesi user harus mati bila admin me-lock/suspend/block/
+ * menghapus akun, atau user mengganti password. Sebelumnya middleware hanya
+ * membaca $_SESSION sehingga sesi tetap hidup.
+ *
+ * Keamanan operasional: bila DB error, JANGAN melempar fatal — cukup log dan
+ * biarkan request lanjut. Ini mencegah self-DoS: user yang sudah login tidak
+ * boleh terkunci dari seluruh aplikasi hanya karena database sedang down.
+ * Sesi lama tanpa key session_version tetap dianggap valid (transisi mulus).
+ */
+function enforceAccountStatus(): void
+{
+    static $enforced = false;
+
+    if ($enforced) {
+        return;
+    }
+    $enforced = true;
+
+    if (!isAuthenticated()) {
+        return;
+    }
+
+    try {
+        require_once __DIR__ . '/../includes/Database.php';
+        $user = Database::fetchOne(
+            "SELECT account_status, is_blocked, role, session_version FROM users WHERE id = ?",
+            [(int) $_SESSION['user_id']]
+        );
+    } catch (Throwable $e) {
+        // Keputusan: DB down bukan alasan logout massal. Lanjutkan request
+        // dengan data sesi yang ada agar aplikasi tetap bisa dipakai.
+        error_log('enforceAccountStatus DB error: ' . $e->getMessage());
+        return;
+    }
+
+    if (!$user) {
+        destroyUserSession();
+        header('Location: /login.php?error=account_removed');
+        exit;
+    }
+
+    if (
+        ($user['account_status'] ?? null) === 'locked' ||
+        ($user['account_status'] ?? null) === 'suspended' ||
+        !empty($user['is_blocked'])
+    ) {
+        destroyUserSession();
+        header('Location: /login.php?error=account_locked');
+        exit;
+    }
+
+    $dbSessionVersion = (int) ($user['session_version'] ?? 1);
+
+    if (isset($_SESSION['session_version'])) {
+        if ((int) $_SESSION['session_version'] !== $dbSessionVersion) {
+            destroyUserSession();
+            header('Location: /login.php?error=session_revoked');
+            exit;
+        }
+    } else {
+        // Sesi lama (dibuat sebelum fitur session_version ada): jangan logout
+        // massal. Tetapkan versi dari DB dan lanjut.
+        $_SESSION['session_version'] = $dbSessionVersion;
+    }
+
+    // Sinkronisasi data sesi dengan DB. Role di-refresh agar demote admin
+    // berlaku paling lambat pada request berikutnya.
+    $_SESSION['session_version'] = $dbSessionVersion;
+    $_SESSION['user_role'] = $user['role'] ?? ($_SESSION['user_role'] ?? 'user');
+}
+
+/**
+ * Increment session_version user agar semua sesi lama menjadi invalid.
+ *
+ * Dipanggil setelah aksi yang seharusnya memutus sesi lain:
+ * block/unblock, ganti role, ganti type, lock/suspend, hapus user,
+ * atau user mengganti password.
+ */
+function incrementSessionVersion(int $userId): void
+{
+    require_once __DIR__ . '/../includes/Database.php';
+    Database::execute("UPDATE users SET session_version = session_version + 1 WHERE id = ?", [$userId]);
 }
 
 /**
@@ -144,6 +230,7 @@ function setUserSession(array $user): void
     $_SESSION['user_id'] = (int) $user['id'];
     $_SESSION['user_email'] = $user['email'];
     $_SESSION['user_role'] = $user['role'];
+    $_SESSION['session_version'] = (int) ($user['session_version'] ?? 1);
     $_SESSION['login_time'] = time();
     $_SESSION['last_regeneration'] = time();
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));

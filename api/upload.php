@@ -12,17 +12,63 @@ ini_set('display_errors', 0);
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST');
-header('Access-Control-Allow-Headers: Content-Type');
+header('Access-Control-Allow-Headers: Content-Type, X-CSRF-Token, X-Upload-Token');
 
-// Lightweight debug logger for upload issues
+/**
+ * Lightweight debug logger for upload issues.
+ *
+ * Only writes when PIXELHOP_DEBUG_LOG=1. IPs are masked to the last octet
+ * (1.2.3.x) and remote URLs are reduced to their hostname so the log never
+ * contains full IPs or full remote URLs.
+ */
 function uploadDebug(string $message, array $context = []): void {
+    if (getenv('PIXELHOP_DEBUG_LOG') !== '1') {
+        return;
+    }
+
+    $safeContext = [];
+    foreach ($context as $key => $value) {
+        if ($key === 'ip' && is_string($value)) {
+            $value = maskIpForDebug($value);
+        } elseif ($key === 'url' && is_string($value)) {
+            $host = parse_url($value, PHP_URL_HOST);
+            $value = is_string($host) ? $host : 'invalid-url';
+        } elseif ($key === 'path' && is_string($value)) {
+            $path = parse_url($value, PHP_URL_PATH);
+            $value = is_string($path) ? $path : '/';
+        }
+        $safeContext[$key] = $value;
+    }
+
     $logFile = __DIR__ . '/../temp/upload_debug.log';
     $line = date('c') . ' ' . $message;
-    if (!empty($context)) {
-        $line .= ' ' . json_encode($context);
+    if (!empty($safeContext)) {
+        $line .= ' ' . json_encode($safeContext);
     }
     $line .= PHP_EOL;
     @file_put_contents($logFile, $line, FILE_APPEND);
+}
+
+/**
+ * Mask an IP address for debug logging.
+ */
+function maskIpForDebug(string $ip): string {
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+        $parts = explode('.', $ip);
+        if (count($parts) === 4) {
+            $parts[3] = 'x';
+            return implode('.', $parts);
+        }
+        return 'x.x.x.x';
+    }
+
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+        // Mask the last hextet.
+        $masked = preg_replace('/[^:]*$/', 'x', $ip);
+        return $masked === null ? 'x' : $masked;
+    }
+
+    return 'x.x.x.x';
 }
 
 // Handle preflight request
@@ -36,9 +82,14 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     jsonResponse(false, 'Method not allowed', 405);
 }
 
+// Central session bootstrap (replaces direct session_start()).
+require_once __DIR__ . '/../includes/bootstrap.php';
+
 // Security Firewall Check
 require_once __DIR__ . '/../includes/SecurityFirewall.php';
 require_once __DIR__ . '/../includes/R2StorageManager.php';
+require_once __DIR__ . '/../includes/ImageHandler.php';
+require_once __DIR__ . '/../includes/JsonStore.php';
 
 // Bypass firewall for valid API token requests (e.g. Shottr)
 $_preAuthToken = $_SERVER['HTTP_X_UPLOAD_TOKEN'] ?? $_POST['upload_token'] ?? null;
@@ -78,7 +129,6 @@ $abuseGuard = new AbuseGuard();
 $safeGuard = new SafeGuard();
 $clientIP = ClientIp::get();
 
-session_start();
 $sessionUserId = $_SESSION['user_id'] ?? null;
 
 // API token auth (for Shottr / external tools)
@@ -96,6 +146,28 @@ if (!$sessionUserId) {
     }
 }
 
+// CSRF verification for browser requests. Valid API-token (Shottr)
+// server-to-server requests are exempt because the token itself is the
+// credential and there is no browser session to forge.
+if (empty($_tokenBypass)) {
+    $csrfToken = $_POST['csrf_token'] ?? null;
+
+    if ($csrfToken === null) {
+        $jsonInput = json_decode(file_get_contents('php://input'), true);
+        if (is_array($jsonInput)) {
+            $csrfToken = $jsonInput['csrf_token'] ?? null;
+        }
+    }
+
+    if ($csrfToken === null) {
+        $csrfToken = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null;
+    }
+
+    if (!is_string($csrfToken) || !hash_equals($_SESSION['csrf_token'] ?? '', $csrfToken)) {
+        jsonResponse(false, 'Invalid CSRF token', 403);
+    }
+}
+
 $fileSize = $_FILES['image']['size'] ?? 0;
 
 $abuseCheck = $abuseGuard->checkUpload($clientIP, $sessionUserId, $fileSize);
@@ -108,6 +180,37 @@ if (!$abuseCheck['allowed']) {
     ]);
     $httpCode = ($abuseCheck['code'] ?? '') === 'rate_limit' ? 429 : 403;
     jsonResponse(false, $abuseCheck['reason'], $httpCode);
+}
+
+// Gatekeeper wiring (D2-01): enforce maintenance mode, kill switch, global
+// storage and per-user quota before any file processing. API-token requests
+// (Shottr) are NOT exempt from Gatekeeper; the bypass token only skips the
+// firewall/abuse layers.
+require_once __DIR__ . '/../core/Gatekeeper.php';
+$gatekeeper = new Gatekeeper();
+$gk = $gatekeeper->canUpload((int)$fileSize, $sessionUserId ?: null);
+if (!($gk['allowed'] ?? true)) {
+    $gkCode = $gk['code'] ?? '';
+    $gkHttp = $gk['code'] ?? 403;
+    if (!is_int($gkHttp) && !ctype_digit((string) $gkHttp)) {
+        $gkHttp = 403;
+    }
+    $gkHttp = (int) $gkHttp;
+    if (in_array($gkCode, [
+        Gatekeeper::ERROR_MAINTENANCE,
+        Gatekeeper::ERROR_KILL_SWITCH,
+        Gatekeeper::ERROR_STORAGE_FULL,
+    ], true)) {
+        $gkHttp = 503;
+    } elseif ($gkCode === Gatekeeper::ERROR_USER_QUOTA) {
+        $gkHttp = 429;
+    }
+
+    uploadDebug('gatekeeper_block', [
+        'code' => $gkCode,
+        'user_id' => $sessionUserId,
+    ]);
+    jsonResponse(false, $gk['reason'] ?? 'Upload ditolak', $gkHttp);
 }
 
 // Handle URL upload (remote fetch)
@@ -136,79 +239,35 @@ if (!empty($remoteUrl)) {
         jsonResponse(false, 'Only HTTP/HTTPS URLs are allowed');
     }
 
-    // SSRF guard: block URLs resolving to private/internal addresses
-    require_once __DIR__ . '/../includes/ImageHandler.php';
+    // SSRF guard + streaming download delegated to ImageHandler. This avoids
+    // the previous inlined cURL RETURNTRANSFER full-body fetch and keeps the
+    // OOM-safe progress-abort download path (with manual redirect validation).
+    $imageHandler = new ImageHandler();
     try {
         ImageHandler::assertPublicUrl($remoteUrl);
-    } catch (InvalidArgumentException $e) {
-        jsonResponse(false, $e->getMessage());
+        $downloaded = $imageHandler->uploadFromUrl($remoteUrl);
+    } catch (Exception $e) {
+        error_log('PixelHop remote upload failed: ' . $e->getMessage());
+        jsonResponse(false, 'Upload failed. Please try again.');
     }
 
-    // Fetch the remote image
-    $ch = curl_init($remoteUrl);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_MAXREDIRS => 5,
-        CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
-        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
-        CURLOPT_TIMEOUT => 60,
-        CURLOPT_CONNECTTIMEOUT => 15,
-        CURLOPT_SSL_VERIFYPEER => true,
-        CURLOPT_USERAGENT => 'PixelHop/1.0 Image Fetcher',
-        CURLOPT_HTTPHEADER => ['Accept: image/*'],
-    ]);
-    
-    $imageData = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-    $connectedIp = (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP);
-    $curlError = curl_error($ch);
+    $tempFilePath = $downloaded['path'];
 
-    // SSRF guard: reject if a redirect landed on a private/internal address
-    if ($connectedIp !== '' && !ImageHandler::isPublicIp($connectedIp)) {
-        uploadDebug('remote_ssrf_block', ['ip' => $connectedIp, 'url' => $remoteUrl]);
-        jsonResponse(false, 'URL resolved to a private or internal address');
-    }
-
-    if ($curlError) {
-        uploadDebug('remote_fetch_error', ['error' => $curlError, 'url' => $remoteUrl]);
-        jsonResponse(false, 'Failed to fetch image: ' . $curlError);
-    }
-    
-    if ($httpCode !== 200) {
-        uploadDebug('remote_http_error', ['http_code' => $httpCode, 'url' => $remoteUrl]);
-        jsonResponse(false, 'Failed to fetch image: HTTP ' . $httpCode);
-    }
-    
-    if (empty($imageData)) {
-        jsonResponse(false, 'Empty response from remote server');
-    }
-    
-    // Check file size
-    $dataSize = strlen($imageData);
-    if ($dataSize > $config['upload']['max_size']) {
-        jsonResponse(false, 'Remote image too large. Maximum size: 10 MB');
-    }
-    
-    // Create temp file
-    $tempFilePath = tempnam(sys_get_temp_dir(), 'pixelhop_remote_');
-    file_put_contents($tempFilePath, $imageData);
-    
     // Extract filename from URL
     $urlPath = parse_url($remoteUrl, PHP_URL_PATH);
     $originalName = $urlPath ? (basename($urlPath) ?: 'image.jpg') : 'image.jpg';
-    
-    // Create pseudo $_FILES array
+
+    // Create pseudo $_FILES array so the rest of the validation flow is
+    // identical for direct and remote uploads.
     $file = [
         'name' => $originalName,
-        'type' => $contentType,
+        'type' => $downloaded['mime'],
         'tmp_name' => $tempFilePath,
         'error' => UPLOAD_ERR_OK,
-        'size' => $dataSize,
+        'size' => $downloaded['size'],
     ];
-    
-    uploadDebug('remote_fetch_success', ['size' => $dataSize, 'type' => $contentType]);
+
+    uploadDebug('remote_fetch_success', ['size' => $downloaded['size'], 'type' => $downloaded['mime']]);
     
 } elseif (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
     $file = $_FILES['image'];
@@ -278,13 +337,15 @@ if (!$safetyCheck['safe'] && empty($safetyCheck['skipped']) && empty($safetyChec
 // This is the "approve first, verify later" approach
 $pendingVerification = !empty($safetyCheck['queued']) || !empty($safetyCheck['rate_limited']);
 
-// Check storage quota for logged-in users (session already started above)
+// Check storage quota for logged-in users (session already started above).
+// Limits come from Gatekeeper settings (single source of truth); the final
+// enforcement is the atomic UPDATE below.
 $uploadUserId = $sessionUserId;
+$storageLimit = null;
 
 if ($uploadUserId) {
     require_once __DIR__ . '/../includes/Database.php';
     $db = Database::getInstance();
-
 
     $userStmt = $db->prepare("SELECT storage_used, account_type FROM users WHERE id = ?");
     $userStmt->execute([$uploadUserId]);
@@ -293,8 +354,9 @@ if ($uploadUserId) {
     if ($userInfo) {
         $storageUsed = (int)($userInfo['storage_used'] ?? 0);
         $isPremium = ($userInfo['account_type'] ?? 'free') === 'premium';
-        $storageLimit = $isPremium ? (5 * 1024 * 1024 * 1024) : (500 * 1024 * 1024);
-
+        $storageLimit = (int) ($isPremium
+            ? $gatekeeper->getSetting('storage_limit_premium', 5368709120)
+            : $gatekeeper->getSetting('storage_limit_free', 524288000));
 
         if (($storageUsed + $file['size']) > $storageLimit) {
             $usedMB = round($storageUsed / 1024 / 1024, 1);
@@ -306,7 +368,7 @@ if ($uploadUserId) {
 
 // Check for duplicate image using file hash
 $fileHash = hash_file('sha256', $file['tmp_name']);
-$duplicateImage = findDuplicateImage($fileHash, $file['size']);
+$duplicateImage = findDuplicateImage($fileHash, $file['size'], $sessionUserId, $clientIP);
 
 if ($duplicateImage) {
     // Build proxy URLs for duplicate response
@@ -382,14 +444,67 @@ try {
 
             $filename = "{$imageId}_original.{$extension}";
             $filepath = "{$tempDir}/{$filename}";
-            copy($file['tmp_name'], $filepath);
+
+            // D6-10/D2-08: never store the raw upload as "original". Strip
+            // EXIF/metadata by re-encoding and cap the max dimension to 9000px
+            // to reject decompression bombs before pixel buffers are allocated.
+            $dimInfo = @getimagesize($file['tmp_name']);
+            if ($dimInfo === false || $dimInfo[0] <= 0 || $dimInfo[1] <= 0) {
+                throw new Exception('Invalid image dimensions.');
+            }
+            if ($dimInfo[0] > 9000 || $dimInfo[1] > 9000) {
+                throw new Exception('Image dimensions exceed the maximum allowed size of 9000px.');
+            }
+
+            $imagickUsed = false;
+            if (extension_loaded('imagick')) {
+                try {
+                    $imagick = new Imagick();
+                    $imagick->setResourceLimit(Imagick::RESOURCETYPE_MEMORY, 256 * 1024 * 1024);
+                    $imagick->setResourceLimit(Imagick::RESOURCETYPE_MAP, 512 * 1024 * 1024);
+                    $imagick->setResourceLimit(Imagick::RESOURCETYPE_AREA, 128 * 1024 * 1024);
+                    $imagick->readImage($file['tmp_name']);
+                    $imagick->stripImage();
+                    $imagick->setImageCompressionQuality($config['image']['quality'] ?? 95);
+                    $imagick->writeImage($filepath);
+                    $imagick->clear();
+                    $imagick->destroy();
+                    $imagickUsed = true;
+                } catch (Exception $imagickException) {
+                    error_log('PixelHop original Imagick re-encode failed: ' . $imagickException->getMessage());
+                    if (isset($imagick)) {
+                        $imagick->clear();
+                        $imagick->destroy();
+                    }
+                    @unlink($filepath);
+                }
+            }
+
+            if (!$imagickUsed) {
+                // Fallback GD re-encode (quality 95).
+                $gdImage = loadImage($file['tmp_name'], $mimeType, false);
+                if (!$gdImage) {
+                    throw new Exception('Failed to re-encode original image.');
+                }
+                $ok = saveImage($gdImage, $filepath, $mimeType, 95);
+                imagedestroy($gdImage);
+                if (!$ok) {
+                    throw new Exception('Failed to write original image.');
+                }
+            }
         } else {
 
             $maxWidth = $sizeConfig['width'];
             $maxHeight = $sizeConfig['height'];
 
+            // Cap variant dimensions to 9000px as well, so downstream
+            // processing never allocates an oversized pixel buffer.
+            $resizeNeeded = $originalWidth > $maxWidth || $originalHeight > $maxHeight;
+            $capNeeded = $originalWidth > 9000 || $originalHeight > 9000;
 
-            if ($originalWidth > $maxWidth || $originalHeight > $maxHeight) {
+            if ($resizeNeeded || $capNeeded) {
+                $maxWidth = min($maxWidth, 9000);
+                $maxHeight = min($maxHeight, 9000);
                 $resizedImage = resizeImage($sourceImage, $originalWidth, $originalHeight, $maxWidth, $maxHeight);
                 $filename = "{$imageId}_{$sizeName}.{$extension}";
                 $filepath = "{$tempDir}/{$filename}";
@@ -477,16 +592,21 @@ try {
 
 
     if ($uploadUserId) {
-        try {
-            require_once __DIR__ . '/../includes/Database.php';
-            $db = Database::getInstance();
-            $stmt = $db->prepare("UPDATE users SET storage_used = storage_used + ? WHERE id = ?");
-            $stmt->execute([$file['size'], $uploadUserId]);
-        } catch (Exception $e) {
+        $db = Database::getInstance();
+        // Atomic quota enforcement (D2-06/D5-19): increment only when the
+        // effective limit is not exceeded. 0 rows updated => quota exceeded.
+        $stmt = $db->prepare(
+            "UPDATE users SET storage_used = storage_used + ? WHERE id = ? AND storage_used + ? <= ?"
+        );
+        $stmt->execute([$file['size'], $uploadUserId, $file['size'], $storageLimit]);
 
-            error_log('Failed to update storage usage: ' . $e->getMessage());
+        if ($stmt->rowCount() === 0) {
+            throw new Exception('Storage quota exceeded');
         }
     }
+
+    // Update global storage counter after a fully successful upload.
+    $gatekeeper->updateGlobalStorage((int) $file['size']);
 
     // Clean up remote temp file if any
     if ($tempFilePath && file_exists($tempFilePath)) {
@@ -527,13 +647,25 @@ try {
 
 } catch (Exception $e) {
 
+    error_log('PixelHop upload failed: ' . $e->getMessage());
+
+    // Compensate: delete S3 variants that were already uploaded for this
+    // image before the failure (quota exceeded, DB/JSON failure, etc).
+    if (!empty($s3Keys)) {
+        try {
+            $storageManager->deleteImage($s3Keys, (int) $file['size']);
+        } catch (Exception $deleteException) {
+            error_log('PixelHop compensation delete failed: ' . $deleteException->getMessage());
+        }
+    }
+
     // Clean up remote temp file if any
     if (isset($tempFilePath) && $tempFilePath && file_exists($tempFilePath)) {
         @unlink($tempFilePath);
     }
 
     cleanupTempDir($tempDir);
-    jsonResponse(false, $e->getMessage());
+    jsonResponse(false, 'Upload failed. Please try again.');
 }
 
 /**
@@ -612,17 +744,33 @@ function slugifyFilename($filename) {
  * Example: "rumah-baru_a3x9K2"
  */
 function generateId($filename = null) {
-    $uniqueCode = generateShortId(6);
-    
-    if ($filename) {
-        $slug = slugifyFilename($filename);
-        if (!empty($slug)) {
-            return $slug . '_' . $uniqueCode;
+    // D5-18: 10-char unique code with JsonStore collision checks (max 5 tries).
+    $store = new JsonStore(__DIR__ . '/../data/images.json');
+
+    for ($attempt = 0; $attempt < 5; $attempt++) {
+        $uniqueCode = generateShortId(10);
+
+        if ($filename) {
+            $slug = slugifyFilename($filename);
+            if (!empty($slug)) {
+                $imageId = $slug . '_' . $uniqueCode;
+            } else {
+                $imageId = $uniqueCode;
+            }
+        } else {
+            $imageId = $uniqueCode;
+        }
+
+        $existing = $store->read();
+        if (!array_key_exists($imageId, $existing)) {
+            return $imageId;
         }
     }
-    
-    // Fallback to just unique code if no filename or empty slug
-    return $uniqueCode;
+
+    // Last-ditch fallback: random_bytes hex is overwhelmingly collision-free.
+    return (is_string($filename) && ($slug = slugifyFilename($filename)) !== '')
+        ? $slug . '_' . bin2hex(random_bytes(8))
+        : bin2hex(random_bytes(8));
 }
 
 /**
@@ -765,189 +913,14 @@ function saveImage($image, $filepath, $mimeType, $quality) {
 }
 
 /**
- * Upload file to S3 using AWS Signature V4 with retry logic
- */
-function uploadToS3($filepath, $key, $contentType, $s3Config, $maxRetries = 3) {
-
-    if (!file_exists($filepath)) {
-        error_log("S3 upload: File not found: {$filepath}");
-        return false;
-    }
-
-    $endpoint = $s3Config['endpoint'];
-    $bucket = $s3Config['bucket'];
-    $accessKey = $s3Config['access_key'];
-    $secretKey = $s3Config['secret_key'];
-    $region = $s3Config['region'];
-
-    $fileContent = file_get_contents($filepath);
-
-
-    $lastError = '';
-    for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-        $result = _doS3Upload($endpoint, $bucket, $key, $accessKey, $secretKey, $region, $fileContent, $contentType);
-
-        if ($result['success']) {
-            return true;
-        }
-
-        $lastError = $result['error'];
-        $httpCode = $result['http_code'];
-
-
-        if ($httpCode >= 500 && $httpCode < 600 && $attempt < $maxRetries) {
-
-            $sleepTime = pow(2, $attempt - 1);
-            error_log("S3 upload attempt {$attempt} failed with HTTP {$httpCode}, retrying in {$sleepTime}s...");
-            sleep($sleepTime);
-            continue;
-        }
-
-
-        break;
-    }
-
-    error_log("S3 upload failed after {$attempt} attempts: {$lastError}");
-    return false;
-}
-
-/**
- * Perform actual S3 upload request
- */
-function _doS3Upload($endpoint, $bucket, $key, $accessKey, $secretKey, $region, $fileContent, $contentType) {
-    $contentLength = strlen($fileContent);
-    $payloadHash = hash('sha256', $fileContent);
-
-    $parsedUrl = parse_url($endpoint);
-    $host = $parsedUrl['host'];
-
-    $url = "{$endpoint}/{$bucket}/{$key}";
-
-    $longDate = gmdate('Ymd\THis\Z');
-    $shortDate = gmdate('Ymd');
-
-    $canonicalUri = '/' . $bucket . '/' . str_replace('%2F', '/', rawurlencode($key));
-
-    $headers = [
-        'content-length' => $contentLength,
-        'content-type' => $contentType,
-        'host' => $host,
-        'x-amz-acl' => 'public-read',
-        'x-amz-content-sha256' => $payloadHash,
-        'x-amz-date' => $longDate,
-    ];
-
-    ksort($headers);
-    $canonicalHeaders = '';
-    $signedHeaders = [];
-    foreach ($headers as $k => $v) {
-        $canonicalHeaders .= strtolower($k) . ':' . trim($v) . "\n";
-        $signedHeaders[] = strtolower($k);
-    }
-    $signedHeadersStr = implode(';', $signedHeaders);
-
-    $canonicalRequest = "PUT\n" .
-        $canonicalUri . "\n" .
-        "\n" .
-        $canonicalHeaders . "\n" .
-        $signedHeadersStr . "\n" .
-        $payloadHash;
-
-    $algorithm = 'AWS4-HMAC-SHA256';
-    $credentialScope = "{$shortDate}/{$region}/s3/aws4_request";
-    $stringToSign = "{$algorithm}\n{$longDate}\n{$credentialScope}\n" . hash('sha256', $canonicalRequest);
-
-    $kDate = hash_hmac('sha256', $shortDate, 'AWS4' . $secretKey, true);
-    $kRegion = hash_hmac('sha256', $region, $kDate, true);
-    $kService = hash_hmac('sha256', 's3', $kRegion, true);
-    $kSigning = hash_hmac('sha256', 'aws4_request', $kService, true);
-    $signature = hash_hmac('sha256', $stringToSign, $kSigning);
-
-    $authorization = "{$algorithm} Credential={$accessKey}/{$credentialScope}, SignedHeaders={$signedHeadersStr}, Signature={$signature}";
-
-    $ch = curl_init();
-    curl_setopt_array($ch, [
-        CURLOPT_URL => $url,
-        CURLOPT_CUSTOMREQUEST => 'PUT',
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POSTFIELDS => $fileContent,
-        CURLOPT_HTTPHEADER => [
-            "Authorization: {$authorization}",
-            "Content-Type: {$contentType}",
-            "Content-Length: {$contentLength}",
-            "Host: {$host}",
-            "x-amz-acl: public-read",
-            "x-amz-content-sha256: {$payloadHash}",
-            "x-amz-date: {$longDate}",
-        ],
-        CURLOPT_SSL_VERIFYPEER => true,
-        CURLOPT_TIMEOUT => 120,
-        CURLOPT_CONNECTTIMEOUT => 30,
-    ]);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $error = curl_error($ch);
-
-    if ($error) {
-        return [
-            'success' => false,
-            'error' => "CURL error: {$error}",
-            'http_code' => 0
-        ];
-    }
-
-    if ($httpCode < 200 || $httpCode >= 300) {
-        return [
-            'success' => false,
-            'error' => "HTTP {$httpCode}: {$response}",
-            'http_code' => $httpCode
-        ];
-    }
-
-    return [
-        'success' => true,
-        'error' => null,
-        'http_code' => $httpCode
-    ];
-}
-
-/**
  * Save image data to JSON database
  */
 function saveImageData($imageId, $data) {
-    $dataDir = __DIR__ . '/../data';
-    $dataFile = $dataDir . '/images.json';
-
-    if (!is_dir($dataDir)) {
-        mkdir($dataDir, 0755, true);
-    }
-
-    // Atomic read-modify-write under an exclusive lock so concurrent
-    // uploads don't clobber each other's entries
-    $fp = fopen($dataFile, 'c+');
-    if (!$fp) {
-        error_log('saveImageData: cannot open ' . $dataFile);
-        return;
-    }
-
-    if (!flock($fp, LOCK_EX)) {
-        fclose($fp);
-        error_log('saveImageData: cannot lock ' . $dataFile);
-        return;
-    }
-
-    $content = stream_get_contents($fp);
-    $images = json_decode($content, true) ?: [];
-
-    $images[$imageId] = $data;
-
-    rewind($fp);
-    ftruncate($fp, 0);
-    fwrite($fp, json_encode($images, JSON_PRETTY_PRINT));
-    fflush($fp);
-    flock($fp, LOCK_UN);
-    fclose($fp);
+    $store = new JsonStore(__DIR__ . '/../data/images.json');
+    $store->mutate(function (array $images) use ($imageId, $data): array {
+        $images[$imageId] = $data;
+        return $images;
+    });
 }
 
 /**
@@ -988,31 +961,41 @@ function jsonResponse($success, $error = null, $code = 200, $data = []) {
 }
 
 /**
- * Find duplicate image by hash and size
+ * Find duplicate image by hash and size.
+ *
+ * D2-04: duplicates are only deduplicated within the same owner scope:
+ * - logged-in users only match their own previous uploads
+ * - guests only match previous guest uploads from the same IP
+ * Images owned by someone else are never reused.
  */
-function findDuplicateImage($hash, $size) {
-    $dataFile = __DIR__ . '/../data/images.json';
+function findDuplicateImage($hash, $size, $sessionUserId, $clientIP) {
+    $store = new JsonStore(__DIR__ . '/../data/images.json');
+    $images = $store->read();
 
-    if (!file_exists($dataFile)) {
-        return null;
-    }
-
-    $images = json_decode(file_get_contents($dataFile), true) ?: [];
-
-    foreach ($images as $imageId => $imageData) {
+    foreach ($images as $imageData) {
 
         if (!empty($imageData['delete_at'])) {
             continue;
         }
 
+        $recordUserId = isset($imageData['user_id']) ? (int) $imageData['user_id'] : 0;
+
+        if ($sessionUserId) {
+            if ($recordUserId !== (int) $sessionUserId) {
+                continue;
+            }
+        } else {
+            // Both must be guest uploads and the recorded IP must match.
+            if ($recordUserId !== 0) {
+                continue;
+            }
+            if (($imageData['ip'] ?? '') !== $clientIP) {
+                continue;
+            }
+        }
 
         if (!empty($imageData['hash']) && $imageData['hash'] === $hash) {
             return $imageData;
-        }
-
-
-        if (empty($imageData['hash']) && isset($imageData['size']) && $imageData['size'] === $size) {
-
         }
     }
 

@@ -4,7 +4,7 @@
  * Handles Google OAuth response
  */
 
-session_start();
+require_once __DIR__ . '/../includes/bootstrap.php';
 require_once __DIR__ . '/middleware.php';
 require_once __DIR__ . '/../includes/Database.php';
 
@@ -28,7 +28,7 @@ function oauthError(string $message): void {
 // Verify state token
 try {
     $state = $_GET['state'] ?? '';
-    if (empty($state) || $state !== ($_SESSION['oauth_state'] ?? '')) {
+    if (empty($state) || !hash_equals($_SESSION['oauth_state'] ?? '', $state)) {
         oauthError('Invalid OAuth state. Please try again.');
     }
     unset($_SESSION['oauth_state']);
@@ -108,6 +108,13 @@ try {
         oauthError('Could not get email from Google.');
     }
 
+    // D1-02: never accept an OAuth login from an unverified Google account.
+    if (($userInfo['email_verified'] ?? false) !== true) {
+        oauthDebug('Google email not verified: ' . ($userInfo['email'] ?? ''));
+        error_log('Google OAuth email not verified for: ' . ($userInfo['email'] ?? 'unknown'));
+        oauthError('Google account email is not verified');
+    }
+
     $email = $userInfo['email'];
     $googleId = $userInfo['sub'];
     $name = $userInfo['name'] ?? '';
@@ -115,24 +122,51 @@ try {
 
     oauthDebug('Userinfo ok for email=' . $email);
 
-    // Check if user exists
+    // Resolve the account in two explicit steps so the email and google_id
+    // lookup paths never get conflated (D1-02).
+    //
+    // Step 1: exact google_id match. This is an established OAuth link and
+    // always wins when present.
     $existingUser = Database::fetchOne(
-        'SELECT id, email, google_id, is_blocked, block_reason FROM users WHERE email = ? OR google_id = ?',
-        [$email, $googleId]
+        'SELECT id, email, google_id, is_blocked, block_reason, account_status, status_reason, email_verified FROM users WHERE google_id = ?',
+        [$googleId]
     );
+
+    if (!$existingUser) {
+        // Step 2: same email, but only when the local account is already
+        // verified. Unverified local accounts must complete manual email
+        // verification before OAuth can be linked to them.
+        $emailUser = Database::fetchOne(
+            'SELECT id, email, google_id, is_blocked, block_reason, account_status, status_reason, email_verified FROM users WHERE email = ?',
+            [$email]
+        );
+
+        if ($emailUser) {
+            if (!$emailUser['email_verified']) {
+                oauthDebug('Email match is not verified; refusing OAuth link for email=' . $email);
+                oauthError('Please verify your email address before linking Google. Check your inbox or resend the verification email.');
+            }
+
+            Database::execute(
+                'UPDATE users SET google_id = ?, avatar_url = ? WHERE id = ?',
+                [$googleId, $picture, $emailUser['id']]
+            );
+            $existingUser = $emailUser;
+            $existingUser['google_id'] = $googleId;
+            oauthDebug('Linked google_id to verified email user id=' . $existingUser['id']);
+        }
+    }
 
     if ($existingUser) {
 
-        if ($existingUser['is_blocked']) {
+        if (!empty($existingUser['is_blocked'])) {
             oauthError($existingUser['block_reason'] ?: 'Your account has been suspended.');
         }
 
-
-        if (empty($existingUser['google_id'])) {
-            Database::execute(
-                'UPDATE users SET google_id = ?, avatar_url = ?, email_verified = 1, email_verified_at = NOW() WHERE id = ?',
-                [$googleId, $picture, $existingUser['id']]
-            );
+        $accountStatus = $existingUser['account_status'] ?? 'active';
+        if ($accountStatus === 'locked' || $accountStatus === 'suspended') {
+            $reason = $existingUser['status_reason'] ?: 'Your account has been locked.';
+            oauthError($reason . ' Please contact support@hel.ink.');
         }
 
         $userId = $existingUser['id'];
@@ -175,6 +209,7 @@ $_SESSION['user_id'] = $userId;
 $_SESSION['user_email'] = $user['email'];
 $_SESSION['user_role'] = $user['role'];
 $_SESSION['user_account_type'] = $user['account_type'];
+$_SESSION['session_version'] = (int)($user['session_version'] ?? 1);
 $_SESSION['logged_in_at'] = time();
 
 // Regenerate session ID for security

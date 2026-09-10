@@ -151,7 +151,7 @@ $siteName = $config['site']['name'];
                         <i data-lucide="chevron-down" class="w-5 h-5 faq-icon"></i>
                     </div>
                     <div class="faq-answer">
-                        <strong>Guest (No Account):</strong> 100MB/day bandwidth, 100 uploads/hour, 2,000 uploads/day<br>
+                        <strong>Guest (No Account):</strong> 100MB/day bandwidth, 20 uploads/hour, 2,000 uploads/day<br>
                         <strong>Free Users:</strong> 500MB total storage, 5 OCR/day, 3 RemBG/day<br>
                         <strong>Premium Users:</strong> 5GB storage, 50 OCR/day, 30 RemBG/day<br><br>
                         <strong>Tool Limits (Compress, Resize, Convert, Crop):</strong><br>
@@ -203,7 +203,7 @@ $siteName = $config['site']['name'];
                         <i data-lucide="chevron-down" class="w-5 h-5 faq-icon"></i>
                     </div>
                     <div class="faq-answer">
-                        Our OCR (Optical Character Recognition) uses Tesseract, an open-source OCR engine. It supports English and Indonesian by default. For best results, upload clear images with good contrast and legible text.
+                        Our OCR (Optical Character Recognition) uses PaddleOCR, an open-source OCR engine. It supports English and Indonesian by default. For best results, upload clear images with good contrast and legible text.
                     </div>
                 </div>
 

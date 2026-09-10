@@ -4,7 +4,7 @@
  * Sub-page of Gallery
  */
 
-session_start();
+require_once __DIR__ . '/../includes/bootstrap.php';
 require_once __DIR__ . '/../auth/middleware.php';
 require_once __DIR__ . '/../includes/Database.php';
 require_once __DIR__ . '/../core/Gatekeeper.php';
@@ -51,8 +51,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 // Get today's usage stats
 $toolStats = [];
 $tools = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg'];
+$toolStatsStmt = $db->prepare("SELECT COUNT(*) FROM usage_logs WHERE tool_name = ? AND DATE(created_at) = CURDATE()");
 foreach ($tools as $tool) {
-    $count = $db->query("SELECT COUNT(*) FROM usage_logs WHERE tool_name = '$tool' AND DATE(created_at) = CURDATE()")->fetchColumn();
+    $toolStatsStmt->execute([$tool]);
+    $count = $toolStatsStmt->fetchColumn();
     $toolStats[$tool] = (int) $count;
 }
 

@@ -9,6 +9,7 @@
  */
 
 require_once __DIR__ . '/ClientIp.php';
+require_once __DIR__ . '/JsonStore.php';
 
 class RateLimiter
 {
@@ -33,33 +34,31 @@ class RateLimiter
     /**
      * Check if request is allowed
      * Returns true if allowed, false if rate limited
+     *
+     * D3-09: baca-modify-write counter dilakukan di dalam satu lock
+     * flock(LOCK_EX) via JsonStore::mutate(), sehingga burst paralel
+     * tidak bisa membaca nilai basi dan lolos bersamaan.
      */
     public function isAllowed(?int $userId = null): bool
     {
         $identifier = $this->getIdentifier($userId);
         $limit = $userId ? self::USER_LIMIT : self::GUEST_LIMIT;
-
-        $data = $this->getTokenData($identifier);
         $now = time();
 
+        $store = new JsonStore($this->getFilePath($identifier));
 
-        if ($now - $data['window_start'] >= self::WINDOW_SECONDS) {
-            $data = [
-                'window_start' => $now,
-                'requests' => 0,
-            ];
-        }
+        $result = $store->mutate(function (array $data) use ($identifier, $limit, $now) {
+            $data = $this->normalizeTokenData($data, $identifier, $now);
 
+            if ($data['requests'] >= $limit) {
+                return false; // non-array => JsonStore tidak menulis file
+            }
 
-        if ($data['requests'] >= $limit) {
-            return false;
-        }
+            $data['requests']++;
+            return $data;
+        });
 
-
-        $data['requests']++;
-        $this->saveTokenData($identifier, $data);
-
-        return true;
+        return $result !== false;
     }
 
     /**
@@ -129,25 +128,13 @@ class RateLimiter
     }
 
     /**
-     * Get token data from file
+     * Normalize token data and reset stale windows.
      */
-    private function getTokenData(string $identifier): array
+    private function normalizeTokenData(array $data, string $identifier, int $now): array
     {
-        $file = $this->getFilePath($identifier);
-
-        if (!file_exists($file)) {
+        if (!$data || !isset($data['window_start']) || $now - (int)$data['window_start'] >= self::WINDOW_SECONDS) {
             return [
-                'window_start' => time(),
-                'requests' => 0,
-            ];
-        }
-
-        $content = file_get_contents($file);
-        $data = json_decode($content, true);
-
-        if (!$data || !isset($data['window_start'])) {
-            return [
-                'window_start' => time(),
+                'window_start' => $now,
                 'requests' => 0,
             ];
         }
@@ -156,12 +143,15 @@ class RateLimiter
     }
 
     /**
-     * Save token data to file
+     * Get token data from file (pembaca murni, tanpa lock eksklusif).
      */
-    private function saveTokenData(string $identifier, array $data): void
+    private function getTokenData(string $identifier): array
     {
-        $file = $this->getFilePath($identifier);
-        file_put_contents($file, json_encode($data), LOCK_EX);
+        return $this->normalizeTokenData(
+            (new JsonStore($this->getFilePath($identifier)))->read(),
+            $identifier,
+            time()
+        );
     }
 
     /**

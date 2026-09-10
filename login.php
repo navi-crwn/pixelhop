@@ -308,19 +308,28 @@ unset($_SESSION['auth_error']);
 
             document.querySelectorAll('.notification-toast').forEach(n => n.remove());
 
-            const notification = document.createElement('div');
-            notification.className = `notification-toast notification-${type}`;
-
+            // Whitelist the type so it can never inject arbitrary class names / markup.
             const icons = {
                 success: 'check-circle',
                 error: 'x-circle',
                 info: 'info'
             };
+            const safeType = Object.prototype.hasOwnProperty.call(icons, type) ? type : 'info';
 
-            notification.innerHTML = `
-                <i data-lucide="${icons[type]}" class="w-5 h-5"></i>
-                <span>${message}</span>
-            `;
+            const notification = document.createElement('div');
+            notification.className = `notification-toast notification-${safeType}`;
+
+            // Build the icon from a trusted whitelist and set the (server/user
+            // controlled) message via textContent so it is never parsed as HTML.
+            const icon = document.createElement('i');
+            icon.setAttribute('data-lucide', icons[safeType]);
+            icon.className = 'w-5 h-5';
+
+            const text = document.createElement('span');
+            text.textContent = message;
+
+            notification.appendChild(icon);
+            notification.appendChild(text);
 
             document.body.appendChild(notification);
             lucide.createIcons();

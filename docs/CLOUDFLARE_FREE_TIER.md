@@ -23,11 +23,13 @@ Value: /i/
 
 Then:
 - Cache eligibility: Eligible for cache
-- Edge TTL: 1 month (2592000 seconds)
+- Edge TTL: 1 day (86400 seconds, maksimum)
 - Browser TTL: 1 year (31536000 seconds)
 ```
 
 **Manfaat:** Reduce request ke Contabo, images di-cache di 300+ edge locations.
+
+> **Catatan penting:** Karena edge TTL dibatasi 1 hari, konten yang dihapus atau disuspend bisa tetap tersaji dari cache edge hingga TTL habis. Setelah menghapus/mensuspend gambar, lakukan **purge** agar perubahan langsung berlaku — lewat **Cloudflare Purge API** (purge by URL, mis. `https://p.hel.ink/i/...`) atau di dashboard **Caching > Configuration > Purge Everything** (cukup untuk zone kecil). Purge by URL lebih hemat kuota cache ketimbang Purge Everything.
 
 ---
 
@@ -136,7 +138,7 @@ location /i/ {
 ```
 
 ### Page Rules Priority (Legacy, use Cache Rules instead)
-1. `/i/*` → Cache Everything, Edge TTL 1 month
+1. `/i/*` → Cache Everything, Edge TTL 1 day (86400 seconds)
 2. `/api/*` → Bypass Cache
 3. `/admin/*` → Bypass Cache
 

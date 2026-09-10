@@ -3,7 +3,7 @@
  * PixelHop - Welcome Page for New Users
  */
 
-session_start();
+require_once __DIR__ . '/../includes/bootstrap.php';
 require_once __DIR__ . '/../auth/middleware.php';
 require_once __DIR__ . '/../includes/Database.php';
 

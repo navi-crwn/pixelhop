@@ -9,7 +9,7 @@
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
+header('Access-Control-Allow-Headers: Content-Type, X-CSRF-Token');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
@@ -24,20 +24,34 @@ require_once __DIR__ . '/../includes/Database.php';
 require_once __DIR__ . '/../includes/Turnstile.php';
 require_once __DIR__ . '/middleware.php';
 
+/**
+ * Precomputed Argon2id hash for timing-safe dummy password verification.
+ * Generated once with:
+ * password_hash('dummy_password_for_timing', PASSWORD_ARGON2ID)
+ * Using a valid hash keeps the Argon2 work factor identical (~tens of ms)
+ * for both existing and non-existing users, so response timing does not
+ * reveal whether an email is registered.
+ */
+if (!defined('DUMMY_PASSWORD_HASH')) {
+    define('DUMMY_PASSWORD_HASH', '$argon2id$v=19$m=65536,t=4,p=1$cER1U3Q5Skp5YUZYNUlkcQ$6DPUpkVvmft+abT73fXZgltGwTY4gPWEr4ScAqrrVMY');
+}
+
 // Get input
 $input = getInput();
 
 $email = trim($input['email'] ?? '');
 $password = $input['password'] ?? '';
 $remember = (bool) ($input['remember'] ?? false);
-$csrfToken = $input['csrf_token'] ?? '';
+// Accept CSRF token from JSON body, form POST, or X-CSRF-Token header.
+$csrfToken = $input['csrf_token'] ?? $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
 $turnstileToken = $input['cf-turnstile-response'] ?? '';
 
 // Get client IP for rate limiting
 $clientIp = getClientIp();
 
-// Validate CSRF for form submissions
-if (!empty($_POST) && !validateCsrfToken($csrfToken)) {
+// Validate CSRF for ALL POST requests, including JSON submissions.
+$sessionCsrfToken = $_SESSION['csrf_token'] ?? '';
+if ($sessionCsrfToken === '' || $csrfToken === '' || !hash_equals($sessionCsrfToken, $csrfToken)) {
     jsonResponse(false, 'Invalid security token. Please refresh and try again.', 403);
 }
 
@@ -64,7 +78,7 @@ if (empty($password)) {
 try {
 
     $user = Database::fetchOne(
-        'SELECT id, email, password_hash, role, is_blocked, block_reason, locked_until, login_attempts, email_verified, account_status, status_reason, warning_message, warning_shown
+        'SELECT id, email, password_hash, role, is_blocked, block_reason, locked_until, login_attempts, email_verified, account_status, status_reason, warning_message, warning_shown, session_version
          FROM users WHERE email = ?',
         [$email]
     );
@@ -72,38 +86,10 @@ try {
 
     if (!$user) {
 
-        password_verify($password, '$argon2id$v=19$m=65536,t=4,p=1$fake$fakehash');
+        // Timing-safe: perform the same Argon2 work as a real user.
+        password_verify($password, DUMMY_PASSWORD_HASH);
         logLoginAttempt($clientIp, $email, false);
         jsonResponse(false, 'Invalid email or password', 401);
-    }
-
-
-    if ($user['is_blocked']) {
-        $reason = $user['block_reason'] ?: 'Your account has been suspended';
-        jsonResponse(false, $reason, 403);
-    }
-
-    // Check account status (locked/suspended)
-    $accountStatus = $user['account_status'] ?? 'active';
-    
-    if ($accountStatus === 'locked') {
-        $reason = $user['status_reason'] ?: 'Your account has been locked.';
-        jsonResponse(false, $reason . ' Please contact support@hel.ink to unlock your account.', 403, [
-            'account_locked' => true
-        ]);
-    }
-    
-    if ($accountStatus === 'suspended') {
-        $reason = $user['status_reason'] ?: 'Your account has been suspended.';
-        jsonResponse(false, $reason . ' Your account and all images will be deleted in 30 days. To appeal, please contact support@hel.ink within 30 days.', 403, [
-            'account_suspended' => true
-        ]);
-    }
-
-
-    if ($user['locked_until'] && strtotime($user['locked_until']) > time()) {
-        $unlockTime = date('H:i', strtotime($user['locked_until']));
-        jsonResponse(false, "Account temporarily locked. Try again after {$unlockTime}.", 403);
     }
 
 
@@ -125,11 +111,38 @@ try {
 
         logLoginAttempt($clientIp, $email, false);
 
-        if ($lockUntil) {
-            jsonResponse(false, 'Too many failed attempts. Account locked for 15 minutes.', 403);
-        }
-
         jsonResponse(false, 'Invalid email or password', 401);
+    }
+
+    // Check account status (locked/suspended/blocked) only AFTER the password
+    // has been verified, so account state is not leaked to unauthenticated
+    // callers. All authentication failures above return the same generic
+    // message and status code.
+    if ($user['is_blocked']) {
+        $reason = $user['block_reason'] ?: 'Your account has been suspended';
+        jsonResponse(false, $reason, 403);
+    }
+
+    $accountStatus = $user['account_status'] ?? 'active';
+
+    if ($accountStatus === 'locked') {
+        $reason = $user['status_reason'] ?: 'Your account has been locked.';
+        jsonResponse(false, $reason . ' Please contact support@hel.ink to unlock your account.', 403, [
+            'account_locked' => true
+        ]);
+    }
+
+    if ($accountStatus === 'suspended') {
+        $reason = $user['status_reason'] ?: 'Your account has been suspended.';
+        jsonResponse(false, $reason . ' Your account and all images will be deleted in 30 days. To appeal, please contact support@hel.ink within 30 days.', 403, [
+            'account_suspended' => true
+        ]);
+    }
+
+
+    if ($user['locked_until'] && strtotime($user['locked_until']) > time()) {
+        $unlockTime = date('H:i', strtotime($user['locked_until']));
+        jsonResponse(false, "Account temporarily locked. Try again after {$unlockTime}.", 403);
     }
 
     // Check email verification
@@ -166,6 +179,7 @@ try {
 
 
     setUserSession($user);
+    $_SESSION['session_version'] = (int)($user['session_version'] ?? 1);
 
 
     if ($remember) {

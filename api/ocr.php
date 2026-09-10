@@ -24,6 +24,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     jsonError('Method not allowed', 405);
 }
 
+// Session bootstrap (secure cookie params + periodic session ID regeneration)
+require_once __DIR__ . '/../includes/bootstrap.php';
+
 // Security Firewall Check
 require_once __DIR__ . '/../includes/SecurityFirewall.php';
 $firewall = new SecurityFirewall();
@@ -35,6 +38,7 @@ if (!$firewallCheck['allowed']) {
 require_once __DIR__ . '/../includes/ImageHandler.php';
 require_once __DIR__ . '/../includes/AiService.php';
 require_once __DIR__ . '/../includes/RateLimiter.php';
+require_once __DIR__ . '/../includes/ClientIp.php';
 require_once __DIR__ . '/../auth/middleware.php';
 require_once __DIR__ . '/../core/Gatekeeper.php';
 
@@ -63,33 +67,53 @@ if (!isAuthenticated()) {
     jsonError('Please login to use OCR text extraction. It\'s free!', 401);
 }
 
-// Quota enforcement
+// Quota enforcement (atomic claim)
 $currentUser = getCurrentUser();
 $isPremium = ($currentUser['account_type'] ?? 'free') === 'premium';
 $isUserAdmin = ($currentUser['role'] ?? '') === 'admin';
+$userId = getCurrentUserId();
+
+$usageClaimId = null;
 
 if (!$isUserAdmin) {
-    require_once __DIR__ . '/../includes/Database.php';
     $db = Database::getInstance();
-
-
     $ocrLimit = (int)$gatekeeper->getSetting($isPremium ? 'daily_ocr_limit_premium' : 'daily_ocr_limit_free', $isPremium ? 50 : 5);
 
+    // D5-14: single atomic statement. INSERT succeeds only when the user is
+    // still under their daily limit, so concurrent requests cannot all pass
+    // the old SELECT COUNT(*) check before any of them records usage.
+    // usage_logs.status enum has no 'processing'; claim starts as 'failed'
+    // and is flipped to 'success' on completion or DELETEd as a refund.
+    $claimStmt = $db->prepare("
+        INSERT INTO usage_logs (user_id, tool_name, status, ip_address, created_at)
+        SELECT ?, 'ocr', 'failed', ?, NOW()
+        FROM DUAL
+        WHERE (SELECT COUNT(*) FROM usage_logs
+               WHERE user_id = ? AND tool_name = 'ocr' AND DATE(created_at) = CURDATE()) < ?
+    ");
+    $claimStmt->execute([$userId, ClientIp::get(), $userId, $ocrLimit]);
 
-    $today = date('Y-m-d');
-    $usageStmt = $db->prepare("SELECT COUNT(*) FROM usage_logs WHERE user_id = ? AND tool_name = 'ocr' AND DATE(created_at) = ?");
-    $usageStmt->execute([getCurrentUserId(), $today]);
-    $usedToday = (int)$usageStmt->fetchColumn();
-
-    if ($usedToday >= $ocrLimit) {
-        jsonError('Daily quota exceeded. You have used ' . $usedToday . '/' . $ocrLimit . ' OCR operations today. ' . ($isPremium ? '' : 'Upgrade to Premium for 50 uses/day!'), 429);
+    if ($claimStmt->rowCount() === 0) {
+        jsonError('Daily quota exceeded. You have reached your ' . $ocrLimit . ' OCR operations limit for today. ' . ($isPremium ? '' : 'Upgrade to Premium for 50 uses/day!'), 429);
     }
+
+    $usageClaimId = (int)$db->lastInsertId();
+}
+
+// Heavy-tool gate (D5-16): CPU load + concurrency protection before launching Python
+$heavy = $gatekeeper->canRunHeavyTool('ocr', $userId ?: null);
+if (!($heavy['allowed'] ?? true)) {
+    if ($usageClaimId !== null) {
+        $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
+        $refundStmt->execute([$usageClaimId]);
+    }
+    jsonError($heavy['reason'] ?? 'Server busy, please try again later.', 503);
 }
 
 // Rate limiting
 $rateLimiter = new RateLimiter();
-$rateLimiter->enforce(getCurrentUserId());
-$rateLimiter->addHeaders(getCurrentUserId());
+$rateLimiter->enforce($userId);
+$rateLimiter->addHeaders($userId);
 
 try {
     $handler = new ImageHandler();
@@ -138,11 +162,16 @@ try {
 
 
     if (!$result['success']) {
+        // Refund the atomic claim so a failed attempt does not consume quota.
+        if ($usageClaimId !== null) {
+            $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
+            $refundStmt->execute([$usageClaimId]);
+        }
         $code = $result['code'] ?? 500;
         http_response_code($code);
         echo json_encode([
             'success' => false,
-            'error' => $result['error'],
+            'error' => 'OCR processing failed. Please try again.',
             'load_info' => $aiService->getLoadInfo(),
         ]);
         exit;
@@ -150,6 +179,13 @@ try {
 
 
     $processingTimeMs = $result['duration_ms'] ?? 0;
+
+    if ($usageClaimId !== null) {
+        // Mark the claim as a completed, successful audit record.
+        $finalizeStmt = $db->prepare("UPDATE usage_logs SET status = 'success', file_size = ?, processing_time_ms = ? WHERE id = ?");
+        $finalizeStmt->execute([$imageData['size'], $processingTimeMs, $usageClaimId]);
+    }
+
     $gatekeeper->recordToolUsage('ocr', getCurrentUserId() ?? 0, $imageData['size'], $processingTimeMs, 'success');
 
 
@@ -170,10 +206,19 @@ try {
     ], JSON_UNESCAPED_UNICODE);
 
 } catch (InvalidArgumentException $e) {
-    jsonError($e->getMessage(), 400);
+    if ($usageClaimId !== null) {
+        $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
+        $refundStmt->execute([$usageClaimId]);
+    }
+    error_log('OCR error (InvalidArgumentException): ' . $e->getMessage());
+    jsonError('Invalid input.', 400);
 } catch (Exception $e) {
+    if ($usageClaimId !== null) {
+        $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
+        $refundStmt->execute([$usageClaimId]);
+    }
     error_log('OCR error: ' . $e->getMessage());
-    jsonError('OCR processing failed: ' . $e->getMessage(), 500);
+    jsonError('OCR processing failed. Please try again later.', 500);
 }
 
 /**

@@ -16,6 +16,44 @@ class ImageHandler
     private const TEMP_LIFETIME = 6 * 60 * 60;
     private const MAX_DIMENSION = 8000;
     private const CHUNK_SIZE = 8192;
+    private const MAX_REDIRECTS = 3;
+    private const CURL_TIMEOUT_HEAD = 10;
+    private const CURL_TIMEOUT_DOWNLOAD = 60;
+
+    /**
+     * IP ranges that must never be reached by the image fetcher.
+     * Includes private, loopback, link-local, CGNAT, benchmark, multicast,
+     * reserved, documentation and IPv6 transition ranges.
+     */
+    private const BLOCKED_IPV4_CIDRS = [
+        '0.0.0.0/8',
+        '10.0.0.0/8',
+        '100.64.0.0/10', // CGNAT (e.g. Alibaba metadata 100.100.100.200)
+        '127.0.0.0/8',
+        '169.254.0.0/16', // link-local (e.g. cloud metadata 169.254.169.254)
+        '172.16.0.0/12',
+        '192.0.0.0/24',
+        '192.0.2.0/24', // TEST-NET-1
+        '192.88.99.0/24',
+        '192.168.0.0/16',
+        '198.18.0.0/15', // benchmark
+        '198.51.100.0/24', // TEST-NET-2
+        '203.0.113.0/24', // TEST-NET-3
+        '224.0.0.0/4', // multicast
+        '240.0.0.0/4', // reserved
+        '255.255.255.255/32',
+    ];
+
+    private const BLOCKED_IPV6_CIDRS = [
+        '::1/128',
+        'fc00::/7', // ULA
+        'fe80::/10', // link-local
+        '64:ff9b::/96', // NAT64
+        '2001:db8::/32', // documentation
+        '2002::/16', // 6to4
+        'ff00::/8', // multicast
+        '::/128',
+    ];
 
     private string $tempDir;
     private ?string $sessionId;
@@ -27,15 +65,6 @@ class ImageHandler
         'image/webp' => 'webp',
         'image/bmp' => 'bmp',
         'image/tiff' => 'tiff',
-    ];
-
-    private static array $mimeToImagick = [
-        'image/jpeg' => 'JPEG',
-        'image/png' => 'PNG',
-        'image/gif' => 'GIF',
-        'image/webp' => 'WEBP',
-        'image/bmp' => 'BMP',
-        'image/tiff' => 'TIFF',
     ];
 
     public function __construct(?string $sessionId = null)
@@ -88,7 +117,7 @@ class ImageHandler
 
 
         $scheme = parse_url($url, PHP_URL_SCHEME);
-        if (!in_array(strtolower($scheme), ['http', 'https'])) {
+        if (!in_array(strtolower((string) $scheme), ['http', 'https'], true)) {
             throw new InvalidArgumentException('Only HTTP/HTTPS URLs are allowed');
         }
 
@@ -148,45 +177,105 @@ class ImageHandler
             throw new InvalidArgumentException('Invalid URL host');
         }
 
-        // Strip brackets from IPv6 literals
-        $host = trim($host, '[]');
-
-        // Resolve hostname to IPs (literal IPs pass straight through)
-        if (filter_var($host, FILTER_VALIDATE_IP)) {
-            $ips = [$host];
-        } else {
-            $records = @dns_get_record($host, DNS_A + DNS_AAAA) ?: [];
-            $ips = [];
-            foreach ($records as $record) {
-                if (!empty($record['ip'])) $ips[] = $record['ip'];
-                if (!empty($record['ipv6'])) $ips[] = $record['ipv6'];
-            }
-            if (empty($ips)) {
-                throw new InvalidArgumentException('Could not resolve URL host');
-            }
-        }
-
-        foreach ($ips as $ip) {
-            if (!self::isPublicIp($ip)) {
-                throw new InvalidArgumentException('URL points to a private or internal address');
-            }
-        }
+        // Resolves AND rejects the host if ANY resolved IP is blocked.
+        self::resolveAndValidate($host);
     }
 
     /**
-     * Is the given IP address publicly routable (not private/reserved)?
+     * Is the given IP address publicly routable?
+     *
+     * FILTER_VALIDATE_IP is used only as a sanity check. The real allow-list
+     * decision is made by isBlockedIp(): an explicit CIDR blocklist covering
+     * private, loopback, link-local, CGNAT, benchmark, multicast, reserved and
+     * IPv6 transition ranges.
      */
     public static function isPublicIp(string $ip): bool
     {
         return $ip !== ''
-            && (bool) filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+            && (bool) filter_var($ip, FILTER_VALIDATE_IP)
+            && !self::isBlockedIp($ip);
+    }
+
+    /**
+     * Return true when $ip belongs to any blocked CIDR range.
+     */
+    private static function isBlockedIp(string $ip): bool
+    {
+        $version = filter_var($ip, FILTER_VALIDATE_IP) === false
+            ? null
+            : (strpos($ip, ':') === false ? 4 : 6);
+
+        if ($version === 4) {
+            foreach (self::BLOCKED_IPV4_CIDRS as $cidr) {
+                if (self::ipInCidr($ip, $cidr)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        if ($version === 6) {
+            foreach (self::BLOCKED_IPV6_CIDRS as $cidr) {
+                if (self::ipInCidr($ip, $cidr)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Check whether an IPv4 or IPv6 address is inside a CIDR network.
+     */
+    private static function ipInCidr(string $ip, string $cidr): bool
+    {
+        [$subnet, $prefix] = explode('/', $cidr, 2) + [1 => null];
+        if ($prefix === null || !ctype_digit($prefix)) {
+            return false;
+        }
+
+        $prefix = (int) $prefix;
+        $subnetBytes = @inet_pton($subnet);
+        $ipBytes = @inet_pton($ip);
+
+        if ($subnetBytes === false || $ipBytes === false || strlen($subnetBytes) !== strlen($ipBytes)) {
+            return false;
+        }
+
+        $maxBits = strlen($subnetBytes) * 8;
+        if ($prefix < 0 || $prefix > $maxBits) {
+            return false;
+        }
+
+        $fullBytes = intdiv($prefix, 8);
+        $remainingBits = $prefix % 8;
+
+        if ($fullBytes > 0 && substr($ipBytes, 0, $fullBytes) !== substr($subnetBytes, 0, $fullBytes)) {
+            return false;
+        }
+
+        if ($remainingBits > 0) {
+            $mask = (0xFF << (8 - $remainingBits)) & 0xFF;
+            if ((ord($ipBytes[$fullBytes]) & $mask) !== (ord($subnetBytes[$fullBytes]) & $mask)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
      * Reject the request if curl actually connected to a private/internal IP.
-     * Closes the redirect-based SSRF gap: assertPublicUrl only vets the initial
-     * host, but CURLOPT_FOLLOWLOCATION may land on an internal address, so we
-     * verify the peer curl really talked to after the transfer.
+     *
+     * This is a defence-in-depth check on top of resolveAndValidate() + per-hop
+     * CURLOPT_RESOLVE pinning. Note on the residual TOCTOU limitation: libcurl
+     * reports CURLINFO_PRIMARY_IP only after the connection is established, so
+     * on this callback curl may already have started receiving the response
+     * body. The progress callback is used to run this check as early as curl
+     * exposes the value (normally the first callback after handshake), so an
+     * unexpected peer aborts the transfer before the whole body is consumed.
      */
     public static function assertConnectedIpPublic(\CurlHandle $ch): void
     {
@@ -197,112 +286,292 @@ class ImageHandler
     }
 
     /**
-     * Get URL headers without downloading body
+     * Resolve a host and fail closed unless EVERY resolved address is public.
+     *
+     * DNS round-robin/rebinding protection: if the record set contains even one
+     * blocked IP the whole host is rejected (we never pick "the good one" from
+     * a mixed set). Returns the first public IP so the caller can pin it with
+     * CURLOPT_RESOLVE.
      */
-    private function getUrlHeaders(string $url): array
+    public static function resolveAndValidate(string $host): string
     {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HEADER => true,
-            CURLOPT_NOBODY => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS => 5,
-            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
-            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
-            CURLOPT_TIMEOUT => 10,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_USERAGENT => 'PixelHop/1.0 (Image Downloader)',
-        ]);
+        $host = trim($host, '[]');
 
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-
-        // Guard against redirect-based SSRF (final peer must be public)
-        self::assertConnectedIpPublic($ch);
-
-        if ($error) {
-            throw new RuntimeException('Failed to fetch URL: ' . $error);
+        if ($host === '') {
+            throw new InvalidArgumentException('Invalid URL host');
         }
 
-        if ($httpCode !== 200) {
-            $httpMessages = [
-                401 => 'URL requires authentication. Make sure the image is publicly accessible.',
-                403 => 'Access forbidden. The server rejected the request.',
-                404 => 'Image not found at this URL.',
-                500 => 'Remote server error. Please try again later.',
-            ];
-            $message = $httpMessages[$httpCode] ?? 'URL returned HTTP ' . $httpCode;
-            throw new RuntimeException($message);
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            if (!self::isPublicIp($host)) {
+                throw new InvalidArgumentException('URL points to a private or internal address');
+            }
+            return $host;
         }
 
-
-        $headers = [];
-        foreach (explode("\r\n", $response) as $line) {
-            if (strpos($line, ':') !== false) {
-                list($key, $value) = explode(':', $line, 2);
-                $headers[strtolower(trim($key))] = trim($value);
+        $records = @dns_get_record($host, DNS_A + DNS_AAAA) ?: [];
+        $ips = [];
+        foreach ($records as $record) {
+            if (!empty($record['ip'])) {
+                $ips[] = $record['ip'];
+            }
+            if (!empty($record['ipv6'])) {
+                $ips[] = $record['ipv6'];
             }
         }
 
-        return $headers;
+        if (empty($ips)) {
+            throw new InvalidArgumentException('Could not resolve URL host');
+        }
+
+        foreach ($ips as $ip) {
+            if (!self::isPublicIp($ip)) {
+                throw new InvalidArgumentException('URL points to a private or internal address');
+            }
+        }
+
+        return $ips[0];
     }
 
     /**
-     * Download file with size limit using streaming
+     * Validate a URL (scheme + host) and return the per-hop curl pinning values:
+     * [hostWithoutBrackets, port, scheme, validatedIp]
+     */
+    private static function assertPublicUrlWithResolution(string $url): array
+    {
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            throw new InvalidArgumentException('Only HTTP/HTTPS URLs are allowed');
+        }
+
+        $host = parse_url($url, PHP_URL_HOST);
+        if (!$host) {
+            throw new InvalidArgumentException('Invalid URL host');
+        }
+
+        $port = (int) (parse_url($url, PHP_URL_PORT) ?: ($scheme === 'https' ? 443 : 80));
+
+        return [trim($host, '[]'), $port, $scheme, self::resolveAndValidate($host)];
+    }
+
+    /**
+     * Resolve a relative or absolute redirect target against the current URL
+     * and validate it BEFORE the next hop is followed.
+     */
+    private static function assertValidRedirect(string $currentUrl, string $redirectUrl): string
+    {
+        if ($redirectUrl === '') {
+            throw new InvalidArgumentException('Invalid redirect URL');
+        }
+
+        $target = $redirectUrl;
+
+        if (stripos($target, '//') === 0) {
+            $scheme = parse_url($currentUrl, PHP_URL_SCHEME);
+            $target = strtolower((string) $scheme) . ':' . $target;
+        } elseif (stripos($target, '://') === false) {
+            $base = parse_url($currentUrl);
+            if (empty($base['scheme']) || empty($base['host'])) {
+                throw new InvalidArgumentException('Invalid redirect URL');
+            }
+
+            $scheme = strtolower((string) $base['scheme']);
+            $host = $base['host'];
+            $port = !empty($base['port']) ? ':' . $base['port'] : '';
+            $user = isset($base['user']) ? rawurlencode($base['user']) : '';
+            $pass = isset($base['pass']) ? ':' . rawurlencode($base['pass']) : '';
+            $auth = ($user !== '' || $pass !== '') ? $user . $pass . '@' : '';
+
+            if (str_starts_with($target, '/')) {
+                $path = $target;
+            } else {
+                $basePath = $base['path'] ?? '/';
+                $path = preg_replace('#/[^/]*$#', '/', $basePath) . $target;
+            }
+
+            $query = isset($base['query']) && $base['query'] !== '' ? '?' . $base['query'] : '';
+            $target = $scheme . '://' . $auth . $host . $port . $path . $query;
+        }
+
+        self::assertPublicUrlWithResolution($target);
+        return $target;
+    }
+
+    /**
+     * Get URL headers without downloading body.
+     *
+     * Redirects are followed manually (FOLLOWLOCATION disabled) so each hop can
+     * be re-validated and IP-pinned before curl connects to it.
+     */
+    private function getUrlHeaders(string $url): array
+    {
+        $currentUrl = $url;
+        $headers = [];
+
+        for ($redirects = 0; $redirects <= self::MAX_REDIRECTS; $redirects++) {
+            [$host, $port, $scheme, $ip] = self::assertPublicUrlWithResolution($currentUrl);
+
+            $ch = curl_init($currentUrl);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HEADER => true,
+                CURLOPT_NOBODY => true,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+                CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+                CURLOPT_TIMEOUT => self::CURL_TIMEOUT_HEAD,
+                CURLOPT_CONNECTTIMEOUT => self::CURL_TIMEOUT_HEAD,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_USERAGENT => 'PixelHop/1.0 (Image Downloader)',
+                CURLOPT_RESOLVE => ["$host:$port:$ip"],
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            $redirectUrl = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+
+            // Defence-in-depth: the peer curl actually connected to must be public.
+            self::assertConnectedIpPublic($ch);
+
+            if ($error) {
+                throw new RuntimeException('Failed to fetch URL: ' . $error);
+            }
+
+            if ($redirectUrl !== false && $redirectUrl !== '') {
+                if ($redirects >= self::MAX_REDIRECTS) {
+                    throw new RuntimeException('Too many redirects');
+                }
+
+                $currentUrl = self::assertValidRedirect($currentUrl, $redirectUrl);
+                continue;
+            }
+
+            if ($httpCode !== 200) {
+                $httpMessages = [
+                    401 => 'URL requires authentication. Make sure the image is publicly accessible.',
+                    403 => 'Access forbidden. The server rejected the request.',
+                    404 => 'Image not found at this URL.',
+                    500 => 'Remote server error. Please try again later.',
+                ];
+                $message = $httpMessages[$httpCode] ?? 'URL returned HTTP ' . $httpCode;
+                throw new RuntimeException($message);
+            }
+
+            foreach (explode("\r\n", (string) $response) as $line) {
+                if (strpos($line, ':') !== false) {
+                    [$key, $value] = explode(':', $line, 2);
+                    $headers[strtolower(trim($key))] = trim($value);
+                }
+            }
+
+            return $headers;
+        }
+
+        throw new RuntimeException('Too many redirects');
+    }
+
+    /**
+     * Download file with size limit using streaming.
+     *
+     * Redirects are followed manually (FOLLOWLOCATION disabled). Every hop is
+     * validated and IP-pinned with CURLOPT_RESOLVE before curl connects.
      */
     private function downloadWithLimit(string $url, string $destPath, int $maxSize): void
     {
-        $fp = fopen($destPath, 'wb');
-        if (!$fp) {
-            throw new RuntimeException('Cannot create temp file');
-        }
+        $currentUrl = $url;
 
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_FILE => $fp,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS => 5,
-            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
-            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
-            CURLOPT_TIMEOUT => 60,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_USERAGENT => 'PixelHop/1.0 (Image Downloader)',
-            CURLOPT_NOPROGRESS => false,
-            CURLOPT_PROGRESSFUNCTION => function($ch, $dlTotal, $dlNow) use ($maxSize, $fp, $destPath) {
-                if ($dlNow > $maxSize) {
+        for ($redirects = 0; $redirects <= self::MAX_REDIRECTS; $redirects++) {
+            [$host, $port, $scheme, $ip] = self::assertPublicUrlWithResolution($currentUrl);
 
-                    return 1;
-                }
-                return 0;
-            },
-        ]);
-
-        $success = curl_exec($ch);
-        $error = curl_error($ch);
-
-        // Guard against redirect-based SSRF (final peer must be public)
-        $connectedIp = (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP);
-        fclose($fp);
-
-        if ($connectedIp !== '' && !self::isPublicIp($connectedIp)) {
-            if (file_exists($destPath)) {
-                unlink($destPath);
+            $fp = fopen($destPath, 'wb');
+            if (!$fp) {
+                throw new RuntimeException('Cannot create temp file');
             }
-            throw new InvalidArgumentException('URL resolved to a private or internal address');
+
+            $aborted = false;
+
+            $ch = curl_init($currentUrl);
+            curl_setopt_array($ch, [
+                CURLOPT_FILE => $fp,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+                CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+                CURLOPT_TIMEOUT => self::CURL_TIMEOUT_DOWNLOAD,
+                CURLOPT_CONNECTTIMEOUT => self::CURL_TIMEOUT_HEAD,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_USERAGENT => 'PixelHop/1.0 (Image Downloader)',
+                CURLOPT_RESOLVE => ["$host:$port:$ip"],
+                CURLOPT_NOPROGRESS => false,
+                CURLOPT_PROGRESSFUNCTION => function ($ch, $dlTotal, $dlNow) use ($maxSize, &$aborted) {
+                    // Runs as early as libcurl exposes transfer info. PRIMARY_IP
+                    // normally becomes available on the first callback after the
+                    // connection handshake, so this aborts an unexpected private
+                    // peer before any significant body data has been consumed.
+                    // Limitation: libcurl still delivers CURLINFO_PRIMARY_IP only
+                    // after connecting; the first small chunk may already be in
+                    // flight. The post-transfer checks remain as a backstop.
+                    self::assertConnectedIpPublic($ch);
+
+                    if ($dlNow > $maxSize) {
+                        $aborted = true;
+                        return 1;
+                    }
+                    return 0;
+                },
+            ]);
+
+            try {
+                $success = curl_exec($ch);
+                $error = curl_error($ch);
+
+                // Defence-in-depth backstop (also runs when no progress callback fires).
+                self::assertConnectedIpPublic($ch);
+            } catch (InvalidArgumentException $e) {
+                if (file_exists($destPath)) {
+                    unlink($destPath);
+                }
+                throw $e;
+            } finally {
+                if (is_resource($fp)) {
+                    fclose($fp);
+                }
+            }
+
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $redirectUrl = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+
+            if ($redirectUrl !== false && $redirectUrl !== '') {
+                if ($redirects >= self::MAX_REDIRECTS) {
+                    if (file_exists($destPath)) {
+                        unlink($destPath);
+                    }
+                    throw new RuntimeException('Too many redirects');
+                }
+
+                $currentUrl = self::assertValidRedirect($currentUrl, $redirectUrl);
+                continue;
+            }
+
+            clearstatcache(true, $destPath);
+            if (filesize($destPath) > $maxSize) {
+                unlink($destPath);
+                throw new InvalidArgumentException('Downloaded file exceeds maximum size');
+            }
+
+            if ($aborted) {
+                unlink($destPath);
+                throw new InvalidArgumentException('Downloaded file exceeds maximum size');
+            }
+
+            if (!$success && $error) {
+                unlink($destPath);
+                throw new RuntimeException('Download failed: ' . $error);
+            }
+
+            return;
         }
 
-        clearstatcache(true, $destPath);
-        if (filesize($destPath) > $maxSize) {
-            unlink($destPath);
-            throw new InvalidArgumentException('Downloaded file exceeds maximum size');
-        }
-
-        if (!$success && $error && strpos($error, 'aborted') === false) {
-            unlink($destPath);
-            throw new RuntimeException('Download failed: ' . $error);
-        }
+        throw new RuntimeException('Too many redirects');
     }
 
     /**
@@ -404,7 +673,7 @@ class ImageHandler
     /**
      * Cleanup old temp files (> 6 hours)
      */
-    public static function cleanupTemp(string $tempDir = null): array
+    public static function cleanupTemp(?string $tempDir = null): array
     {
         $tempDir = $tempDir ?? __DIR__ . '/../temp';
         $deletedCount = 0;
@@ -493,57 +762,6 @@ class ImageHandler
     public function isAnimated(Imagick $imagick): bool
     {
         return $imagick->getNumberImages() > 1;
-    }
-
-    /**
-     * Get Imagick format from MIME type
-     */
-    public static function getImagickFormat(string $mimeType): string
-    {
-        return self::$mimeToImagick[$mimeType] ?? 'JPEG';
-    }
-
-    /**
-     * Get MIME type from extension
-     */
-    public static function getMimeFromExtension(string $ext): string
-    {
-        $map = array_flip(self::$allowedMimes);
-        return $map[strtolower($ext)] ?? 'image/jpeg';
-    }
-
-    /**
-     * Get allowed MIME types
-     */
-    public static function getAllowedMimes(): array
-    {
-        return self::$allowedMimes;
-    }
-
-    /**
-     * Save processed image to temp
-     */
-    public function saveTempImage(Imagick $imagick, string $format, int $quality = 90): string
-    {
-        $extension = strtolower($format);
-        if ($extension === 'jpeg') $extension = 'jpg';
-
-        $tempPath = $this->generateTempPath($extension);
-
-        $imagick->setImageFormat($format);
-
-
-        if (in_array($format, ['JPEG', 'WEBP'])) {
-            $imagick->setImageCompressionQuality($quality);
-        } elseif ($format === 'PNG') {
-
-            $pngLevel = (int) round((100 - $quality) / 10);
-            $imagick->setImageCompressionQuality($pngLevel);
-        }
-
-        $imagick->writeImages($tempPath, true);
-
-        return $tempPath;
     }
 
     /**

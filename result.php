@@ -53,7 +53,9 @@ foreach ($images as $id => &$img) {
     foreach ($s3Keys as $sizeName => $key) {
         $proxyUrls[$sizeName] = resultGetProxyUrl($key, $config['site']['url']);
     }
-    // Store proxy URLs, fallback to original urls if s3_keys not available
+    // Fallback terakhir: hanya record lama tanpa s3_keys. URL mentah S3 di
+    // $img['urls'] akan 403 setelah bucket diprivatkan; ini murni jaring
+    // pengaman render untuk data warisan. Upload baru selalu punya s3_keys.
     $img['proxy_urls'] = !empty($proxyUrls) ? $proxyUrls : ($img['urls'] ?? []);
 }
 unset($img); // Break reference

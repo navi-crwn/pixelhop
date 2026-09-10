@@ -73,6 +73,31 @@ function formatBytes($bytes) {
     return $bytes . ' B';
 }
 
+/**
+ * Proxy URL (/i/) untuk thumbnail, dibangun dari s3_keys (otoritatif).
+ *
+ * Bucket S3/R2 sudah privat, jadi URL mentah di $img['urls'] akan 403.
+ * Untuk record lama tanpa s3_keys, key dipulihkan dari path URL bucket.
+ * Mengembalikan string kosong bila key tidak bisa ditentukan.
+ */
+function dashboardProxyUrl(array $img): string {
+    $siteUrl = 'https://p.hel.ink';
+    foreach (['thumb', 'medium', 'original'] as $size) {
+        $key = $img['s3_keys'][$size] ?? '';
+        if ($key === '' && !empty($img['urls'][$size])) {
+            $path = (string) parse_url($img['urls'][$size], PHP_URL_PATH);
+            if (preg_match('~(\d{4}/\d{2}/\d{2}/[^/?#]+)$~', $path, $m)) {
+                $key = $m[1];
+            }
+        }
+        if ($key !== '') {
+            return $siteUrl . '/i/' . $key;
+        }
+    }
+
+    return '';
+}
+
 $csrfToken = generateCsrfToken();
 ?>
 <!DOCTYPE html>
@@ -748,7 +773,7 @@ $csrfToken = generateCsrfToken();
                     <?php else: ?>
                         <?php foreach (array_slice($userImages, 0, 6) as $img): ?>
                         <div class="gallery-item">
-                            <img src="<?= htmlspecialchars($img['urls']['thumb'] ?? $img['urls']['medium'] ?? $img['urls']['original'] ?? '') ?>" alt="" onerror="this.style.display='none'">
+                            <img src="<?= htmlspecialchars(dashboardProxyUrl($img)) ?>" alt="" onerror="this.style.display='none'">
                         </div>
                         <?php endforeach; ?>
                     <?php endif; ?>

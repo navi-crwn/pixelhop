@@ -134,7 +134,11 @@ foreach ($s3Keys as $sizeName => $key) {
     $proxyUrls[$sizeName] = getProxyUrl($key, $siteUrl);
 }
 
-// Fallback to stored URLs if s3_keys not available (old images)
+// Fallback terakhir: hanya untuk record lama yang belum punya s3_keys.
+// CATATAN: URL mentah S3 di $image['urls'] akan 403 setelah objek
+// diprivatkan (public-read dihapus). Ini murni jaring pengaman agar
+// record warisan tetap bisa dirender; upload baru selalu punya s3_keys
+// sehingga selalu memakai proxy /i/.
 if (empty($proxyUrls)) {
     $proxyUrls = $image['urls'] ?? [];
 }
@@ -533,7 +537,7 @@ $lastViewed = isset($image['last_viewed_at']) ? formatDate($image['last_viewed_a
                     <div class="border-t border-white/10 pt-4 mb-4">
                         <div class="link-label mb-2">Size Versions</div>
                         <div class="flex flex-wrap gap-2">
-                            <?php foreach ($image['urls'] as $size => $url): ?>
+                            <?php foreach ($proxyUrls as $size => $url): ?>
                             <a href="<?= htmlspecialchars($url) ?>" target="_blank" class="size-btn" title="Open <?= ucfirst($size) ?>">
                                 <?= ucfirst($size) ?>
                             </a>
@@ -541,10 +545,12 @@ $lastViewed = isset($image['last_viewed_at']) ? formatDate($image['last_viewed_a
                         </div>
                     </div>
 
-                    <a href="<?= htmlspecialchars($image['urls']['original']) ?>" download class="btn-primary w-full justify-center">
+                    <?php if (!empty($proxyUrls['original'])): ?>
+                    <a href="<?= htmlspecialchars($proxyUrls['original']) ?>" download class="btn-primary w-full justify-center">
                         <i data-lucide="download" class="w-4 h-4"></i>
                         Download
                     </a>
+                    <?php endif; ?>
 
                     <!-- Social Share Buttons -->
                     <div class="border-t border-white/10 pt-4 mt-4">
@@ -654,7 +660,7 @@ $lastViewed = isset($image['last_viewed_at']) ? formatDate($image['last_viewed_a
         if (mainImage) {
             mainImage.style.cursor = 'zoom-in';
             mainImage.addEventListener('click', () => {
-                window.open('<?= htmlspecialchars($image['urls']['original']) ?>', '_blank');
+                window.open('<?= htmlspecialchars($proxyUrls['original'] ?? '') ?>', '_blank');
             });
         }
 

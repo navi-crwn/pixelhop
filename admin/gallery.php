@@ -157,7 +157,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
                     'height' => $img['height'] ?? 0,
                     'user_id' => $img['user_id'] ?? null,
                     'created_at' => date('Y-m-d H:i:s', $img['created_at'] ?? 0),
-                    'url' => $img['urls']['original'] ?? '',
+                    // Proxy /i/ (bucket S3 sudah privat; URL mentah akan 403).
+                    'url' => adminProxyUrlForVariant($img, 'original'),
                 ];
             }
         }
@@ -270,6 +271,29 @@ function formatBytes($bytes) {
 
 function getProxyUrl($s3Key) {
     return 'https://p.hel.ink/i/' . $s3Key;
+}
+
+/**
+ * Proxy URL (/i/) untuk satu varian gambar admin.
+ *
+ * s3_keys otoritatif (key = YYYY/MM/DD/id_size.ext); untuk record lama
+ * yang hanya menyimpan URL bucket mentah, key dipulihkan dari path URL.
+ * URL mentah tidak pernah dikembalikan karena bucket sudah privat (403).
+ */
+function adminProxyUrlForVariant(array $img, string $size): string {
+    if (!empty($img['s3_keys'][$size])) {
+        return getProxyUrl($img['s3_keys'][$size]);
+    }
+
+    $raw = $img['urls'][$size] ?? '';
+    if ($raw !== '') {
+        $path = (string) parse_url($raw, PHP_URL_PATH);
+        if (preg_match('~(\d{4}/\d{2}/\d{2}/[^/?#]+)$~', $path, $m)) {
+            return getProxyUrl($m[1]);
+        }
+    }
+
+    return '';
 }
 
 $currentPage = 'gallery';
@@ -690,7 +714,8 @@ $currentPage = 'gallery';
                     
                     <div class="gallery-grid" id="galleryGrid">
                         <?php foreach ($images as $img): 
-                            $thumbUrl = isset($img['s3_keys']['thumb']) ? getProxyUrl($img['s3_keys']['thumb']) : ($img['urls']['thumb'] ?? $img['urls']['medium'] ?? '');
+                            $thumbUrl = adminProxyUrlForVariant($img, 'thumb') ?: adminProxyUrlForVariant($img, 'medium') ?: adminProxyUrlForVariant($img, 'original');
+                            $originalUrl = adminProxyUrlForVariant($img, 'original');
                         ?>
                         <div class="gallery-item" data-id="<?= htmlspecialchars($img['id']) ?>" data-user="<?= $img['is_guest'] ? 'guest' : $img['user_id'] ?>">
                             <div class="gallery-checkbox">
@@ -715,9 +740,11 @@ $currentPage = 'gallery';
                                 <a href="/<?= htmlspecialchars($img['id']) ?>" target="_blank" class="btn-icon" title="View">
                                     <i data-lucide="external-link" class="w-4 h-4"></i>
                                 </a>
-                                <a href="<?= htmlspecialchars($img['urls']['original'] ?? '') ?>" download class="btn-icon" title="Download">
+                                <?php if ($originalUrl !== ''): ?>
+                                <a href="<?= htmlspecialchars($originalUrl) ?>" download class="btn-icon" title="Download">
                                     <i data-lucide="download" class="w-4 h-4"></i>
                                 </a>
+                                <?php endif; ?>
                                 <button class="btn-icon btn-delete" data-id="<?= htmlspecialchars($img['id']) ?>" title="Delete">
                                     <i data-lucide="trash-2" class="w-4 h-4"></i>
                                 </button>

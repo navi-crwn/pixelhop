@@ -151,6 +151,31 @@ function formatBytes($bytes) {
 function getProxyUrl($s3Key) {
     return 'https://p.hel.ink/i/' . $s3Key;
 }
+
+/**
+ * Proxy URL (/i/) untuk satu varian gambar.
+ *
+ * s3_keys bersifat otoritatif (key = YYYY/MM/DD/id_size.ext). Untuk record
+ * lama yang hanya punya URL bucket mentah, key dipulihkan dari path URL
+ * (segmen setelah domain) supaya tetap bisa diproksi. URL mentah S3 TIDAK
+ * pernah dikembalikan karena bucket sudah privat dan akan 403.
+ * Mengembalikan string kosong bila key tidak bisa ditentukan.
+ */
+function proxyUrlForVariant(array $img, string $size): string {
+    if (!empty($img['s3_keys'][$size])) {
+        return getProxyUrl($img['s3_keys'][$size]);
+    }
+
+    $raw = $img['urls'][$size] ?? '';
+    if ($raw !== '') {
+        $path = (string) parse_url($raw, PHP_URL_PATH);
+        if (preg_match('~(\d{4}/\d{2}/\d{2}/[^/?#]+)$~', $path, $m)) {
+            return getProxyUrl($m[1]);
+        }
+    }
+
+    return '';
+}
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -458,8 +483,8 @@ function getProxyUrl($s3Key) {
 
         <div class="gallery-grid" id="galleryGrid">
             <?php foreach ($pagedImages as $img): 
-                $thumbUrl = isset($img['s3_keys']['thumb']) ? getProxyUrl($img['s3_keys']['thumb']) : ($img['urls']['thumb'] ?? $img['urls']['medium'] ?? '');
-                $originalUrl = isset($img['s3_keys']['original']) ? getProxyUrl($img['s3_keys']['original']) : ($img['urls']['original'] ?? '');
+                $thumbUrl = proxyUrlForVariant($img, 'thumb') ?: proxyUrlForVariant($img, 'medium') ?: proxyUrlForVariant($img, 'original');
+                $originalUrl = proxyUrlForVariant($img, 'original');
             ?>
             <div class="gallery-item" data-id="<?= htmlspecialchars($img['id']) ?>">
                 <div class="gallery-checkbox"><i data-lucide="check" class="w-4 h-4 text-white"></i></div>
@@ -472,7 +497,9 @@ function getProxyUrl($s3Key) {
                     </div>
                     <div class="gallery-actions">
                         <a href="/<?= htmlspecialchars($img['id']) ?>" class="gallery-btn" target="_blank">View</a>
+                        <?php if ($originalUrl !== ''): ?>
                         <a href="<?= htmlspecialchars($originalUrl) ?>" class="gallery-btn" download>Download</a>
+                        <?php endif; ?>
                         <button class="gallery-btn gallery-btn-danger btn-delete-single" data-id="<?= htmlspecialchars($img['id']) ?>">Delete</button>
                     </div>
                 </div>

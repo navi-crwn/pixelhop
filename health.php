@@ -92,7 +92,7 @@ function health_probe_s3(array $providerConfig): array
         return ['fail', false];
     }
 
-    $url = $endpoint . '/' . $bucket . '/';
+    $url = rtrim($endpoint, '/') . '/' . $bucket . '/';
 
     $longDate = gmdate('Ymd\THis\Z');
     $shortDate = gmdate('Ymd');

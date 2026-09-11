@@ -359,6 +359,8 @@ try {
             . " --exclude='./python/venv'"
             . " --exclude='./temp'"
             . " --exclude='./data/ratelimit'"
+            . " --exclude='./config'"
+            . " --exclude='./data/logs'"
             . ' . 2>/dev/null';
         $rc = runCommand($cmd);
 

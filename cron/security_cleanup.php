@@ -18,12 +18,14 @@ if (php_sapi_name() !== 'cli') {
 
 require_once __DIR__ . '/../includes/SecurityFirewall.php';
 require_once __DIR__ . '/../includes/R2RateLimiter.php';
+require_once __DIR__ . '/../includes/Logger.php';
 
 $log = function($msg) {
     echo "[" . date('Y-m-d H:i:s') . "] {$msg}\n";
 };
 
 $log("Starting security maintenance...");
+Logger::info('cron', 'Security maintenance started', ['task' => 'security_cleanup']);
 
 // Cleanup firewall data
 try {
@@ -31,6 +33,7 @@ try {
     $results = $firewall->cleanup();
     $log("Firewall cleanup: {$results['ip_requests']} requests, {$results['security_events']} events, {$results['expired_blocks']} expired blocks removed.");
 } catch (Exception $e) {
+    Logger::error('cron', 'Firewall cleanup failed: ' . $e->getMessage(), ['task' => 'security_cleanup']);
     $log("Firewall cleanup error: " . $e->getMessage());
 }
 
@@ -40,7 +43,9 @@ try {
     $deleted = $rateLimiter->cleanup();
     $log("R2 rate limiter cleanup: {$deleted} old records removed.");
 } catch (Exception $e) {
+    Logger::error('cron', 'R2 rate limiter cleanup failed: ' . $e->getMessage(), ['task' => 'security_cleanup']);
     $log("R2 rate limiter cleanup error: " . $e->getMessage());
 }
 
 $log("Security maintenance complete.");
+Logger::info('cron', 'Security maintenance complete', ['task' => 'security_cleanup']);

@@ -10,8 +10,13 @@
  * respons ke klien memakai pesan generik.
  *
  * Karakteristik:
- *   - Satu baris JSON per log, dikirim ke error_log PHP.
+ *   - Satu baris JSON per log, dikirim ke error_log PHP (dual-write).
  *     {"ts":"...","level":"error","channel":"upload","msg":"...","ctx":{...}}
+ *   - Baris JSON yang sama juga di-append ke log terpusat
+ *     data/logs/app-YYYY-MM-DD.jsonl (satu JSON object per baris).
+ *   - Rotasi ukuran: bila file hari ini > 5MB, dirotasi ke
+ *     app-YYYY-MM-DD.N.jsonl (N increment).
+ *   - Retensi 14 hari: file app-*.jsonl lebih tua dari 14 hari dihapus.
  *   - TIDAK mencetak apa pun saat di-require (tanpa side-effect).
  *   - Idempotent: aman di-require berulang kali.
  *   - TIDAK menulis PII: alamat IP di-mask (1.2.3.x) dan key sensitif
@@ -60,6 +65,24 @@ if (!class_exists('Logger', false)) {
 
         /** Placeholder nilai yang di-redact. */
         private const REDACTED = '[redacted]';
+
+        /** Direktori log terpusat (relatif terhadap root repo). */
+        private const LOG_DIR = __DIR__ . '/../data/logs';
+
+        /** Batas ukuran file log harian sebelum dirotasi (5MB). */
+        private const MAX_FILE_SIZE = 5 * 1024 * 1024;
+
+        /** Retensi file log (hari). */
+        private const RETENTION_DAYS = 14;
+
+        /** Nama file marker cek retensi terakhir (mencegah glob tiap panggil). */
+        private const RETENTION_MARKER = 'app-retention.marker';
+
+        /** Apakah direktori log sudah dipastikan ada pada request ini. */
+        private static bool $logDirEnsured = false;
+
+        /** Apakah direktori log bisa ditulis (null = belum dicek). */
+        private static ?bool $logDirWritable = null;
 
         /**
          * Log level ERROR.
@@ -115,7 +138,7 @@ if (!class_exists('Logger', false)) {
         }
 
         /**
-         * Tulis satu baris JSON ke error_log.
+         * Tulis satu baris JSON ke error_log dan file log terpusat (dual-write).
          */
         private static function log(string $level, string $channel, string $message, array $context): void
         {
@@ -139,7 +162,128 @@ if (!class_exists('Logger', false)) {
                     . '","msg":"[unencodable log entry]","ctx":{}}';
             }
 
+            // 1) error_log PHP (perilaku lama dipertahankan).
             error_log($json);
+
+            // 2) Log terpusat harian (best-effort, tak boleh menggagalkan request).
+            self::writeToFile($json);
+        }
+
+        /**
+         * Append satu baris JSON ke data/logs/app-YYYY-MM-DD.jsonl.
+         *
+         * Best-effort: kegagalan I/O tidak pernah memunculkan error/exception.
+         */
+        private static function writeToFile(string $json): void
+        {
+            if (!self::ensureLogDir()) {
+                return;
+            }
+
+            $file = self::currentLogFile();
+
+            // Rotasi ukuran sebelum menulis bila file hari ini sudah melewati batas.
+            if (is_file($file) && @filesize($file) > self::MAX_FILE_SIZE) {
+                self::rotateLogFile($file);
+            }
+
+            @file_put_contents($file, $json . "\n", FILE_APPEND | LOCK_EX);
+
+            self::maybeRunRetention();
+        }
+
+        /**
+         * Pastikan direktori log ada dan bisa ditulis (di-cache per request).
+         */
+        private static function ensureLogDir(): bool
+        {
+            if (self::$logDirEnsured) {
+                return self::$logDirWritable === true;
+            }
+
+            self::$logDirEnsured = true;
+
+            if (!is_dir(self::LOG_DIR)) {
+                // 0775 + recursive; pakai @ agar race antar-request tidak fatal.
+                @mkdir(self::LOG_DIR, 0775, true);
+            }
+
+            self::$logDirWritable = is_dir(self::LOG_DIR) && is_writable(self::LOG_DIR);
+
+            return self::$logDirWritable;
+        }
+
+        /**
+         * Path file log untuk tanggal hari ini.
+         */
+        private static function currentLogFile(): string
+        {
+            return self::LOG_DIR . '/app-' . date('Y-m-d') . '.jsonl';
+        }
+
+        /**
+         * Rotasi file log yang melebihi batas ukuran ke app-YYYY-MM-DD.N.jsonl.
+         *
+         * N dimulai dari 1 dan naik sampai menemukan nama yang belum dipakai.
+         */
+        private static function rotateLogFile(string $file): void
+        {
+            // app-2026-09-11.jsonl -> prefix "app-2026-09-11"
+            $prefix = preg_replace('/\.jsonl$/', '', $file);
+            if (!is_string($prefix)) {
+                $prefix = $file;
+            }
+
+            $n = 1;
+            do {
+                $target = $prefix . '.' . $n . '.jsonl';
+                $n++;
+            } while (file_exists($target) && $n <= 1000);
+
+            // rename() memindahkan isi; kegagalan diabaikan (best-effort).
+            @rename($file, $target);
+        }
+
+        /**
+         * Retensi: hapus file app-*.jsonl lebih tua dari RETENTION_DAYS hari.
+         *
+         * Dijalankan ringan: hanya sekali per hari, dijaga oleh file marker
+         * ber-timestamp sehingga tidak ada glob() di setiap panggilan log.
+         */
+        private static function maybeRunRetention(): void
+        {
+            $marker = self::LOG_DIR . '/' . self::RETENTION_MARKER;
+            $today = date('Y-m-d');
+
+            $last = @file_get_contents($marker);
+            if (is_string($last) && trim($last) === $today) {
+                return;
+            }
+
+            // Tulis marker lebih dulu agar request lain tidak mengulang glob.
+            @file_put_contents($marker, $today, LOCK_EX);
+
+            self::pruneOldLogs();
+        }
+
+        /**
+         * Hapus file app-*.jsonl yang lebih tua dari RETENTION_DAYS hari.
+         */
+        private static function pruneOldLogs(): void
+        {
+            $cutoff = time() - (self::RETENTION_DAYS * 24 * 60 * 60);
+
+            $files = glob(self::LOG_DIR . '/app-*.jsonl');
+            if (!is_array($files)) {
+                return;
+            }
+
+            foreach ($files as $file) {
+                $mtime = @filemtime($file);
+                if ($mtime !== false && $mtime < $cutoff) {
+                    @unlink($file);
+                }
+            }
         }
 
         /**

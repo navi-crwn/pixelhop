@@ -90,6 +90,7 @@ require_once __DIR__ . '/../includes/SecurityFirewall.php';
 require_once __DIR__ . '/../includes/R2StorageManager.php';
 require_once __DIR__ . '/../includes/ImageHandler.php';
 require_once __DIR__ . '/../includes/JsonStore.php';
+require_once __DIR__ . '/../includes/Logger.php';
 
 // Bypass firewall for valid API token requests (e.g. Shottr)
 $_preAuthToken = $_SERVER['HTTP_X_UPLOAD_TOKEN'] ?? $_POST['upload_token'] ?? null;
@@ -248,7 +249,10 @@ if (!empty($remoteUrl)) {
         ImageHandler::assertPublicUrl($remoteUrl);
         $downloaded = $imageHandler->uploadFromUrl($remoteUrl);
     } catch (Exception $e) {
-        error_log('PixelHop remote upload failed: ' . $e->getMessage());
+        Logger::error('upload', 'Remote upload failed: ' . $e->getMessage(), [
+            'exception' => get_class($e),
+            'ip' => $clientIP,
+        ]);
         jsonResponse(false, 'Upload failed. Please try again.');
     }
 
@@ -477,7 +481,9 @@ try {
                     $imagick->destroy();
                     $imagickUsed = true;
                 } catch (Exception $imagickException) {
-                    error_log('PixelHop original Imagick re-encode failed: ' . $imagickException->getMessage());
+                    Logger::error('upload', 'Original Imagick re-encode failed: ' . $imagickException->getMessage(), [
+                        'exception' => get_class($imagickException),
+                    ]);
                     if (isset($imagick)) {
                         $imagick->clear();
                         $imagick->destroy();
@@ -619,7 +625,9 @@ try {
     try {
         $abuseGuard->recordUpload($clientIP, $sessionUserId, (int) $file['size']);
     } catch (Throwable $recordException) {
-        error_log('PixelHop abuse counter update failed: ' . $recordException->getMessage());
+        Logger::error('upload', 'Abuse counter update failed: ' . $recordException->getMessage(), [
+            'exception' => get_class($recordException),
+        ]);
     }
 
     // Clean up remote temp file if any
@@ -661,7 +669,10 @@ try {
 
 } catch (Exception $e) {
 
-    error_log('PixelHop upload failed: ' . $e->getMessage());
+    Logger::error('upload', 'Upload failed: ' . $e->getMessage(), [
+        'exception' => get_class($e),
+        'ip' => $clientIP,
+    ]);
 
     // Compensate: delete S3 variants that were already uploaded for this
     // image before the failure (quota exceeded, DB/JSON failure, etc).
@@ -669,7 +680,9 @@ try {
         try {
             $storageManager->deleteImage($s3Keys, (int) $file['size']);
         } catch (Exception $deleteException) {
-            error_log('PixelHop compensation delete failed: ' . $deleteException->getMessage());
+            Logger::error('upload', 'Compensation delete failed: ' . $deleteException->getMessage(), [
+                'exception' => get_class($deleteException),
+            ]);
         }
     }
 
@@ -868,7 +881,9 @@ function loadImage($filepath, $mimeType, $useImagick = false) {
             $imagick->destroy();
             return $gdImage;
         } catch (Exception $e) {
-            error_log("Imagick load failed: " . $e->getMessage());
+            Logger::error('upload', 'Imagick load failed: ' . $e->getMessage(), [
+                'exception' => get_class($e),
+            ]);
             return false;
         }
     }

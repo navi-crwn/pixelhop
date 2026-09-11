@@ -32,6 +32,9 @@ $r2 = new R2StorageManager($config);
 // Load JsonStore for atomic RMW access to images.json (D2-05, D4-07)
 require_once ROOT_PATH . '/includes/JsonStore.php';
 
+// Structured logger (dual-write: error_log + data/logs/app-*.jsonl)
+require_once ROOT_PATH . '/includes/Logger.php';
+
 $dataFile = ROOT_PATH . '/data/images.json';
 $logFile = ROOT_PATH . '/data/expiration_log.json';
 
@@ -121,6 +124,10 @@ foreach ($markCandidates as $imageId => $image) {
         });
         $stats['marked_for_deletion']++;
     } catch (Exception $e) {
+        Logger::error('cron', 'Image mark for deletion failed: ' . $e->getMessage(), [
+            'task' => 'image_expiration',
+            'image_id' => $imageId,
+        ]);
         echo "  [MARK ERROR] {$imageId}: " . $e->getMessage() . "\n";
     }
 }
@@ -154,6 +161,10 @@ foreach ($deleteCandidates as $imageId => $image) {
             continue;
         }
     } catch (Exception $e) {
+        Logger::error('cron', 'Image delete claim failed: ' . $e->getMessage(), [
+            'task' => 'image_expiration',
+            'image_id' => $imageId,
+        ]);
         echo "  [DELETE MARK ERROR] {$imageId}: " . $e->getMessage() . "\n";
         $stats['deletion_errors']++;
         continue;
@@ -194,6 +205,10 @@ foreach ($deleteCandidates as $imageId => $image) {
             $stats['deleted']++;
             echo "  [REMOVED] {$imageId} from database\n";
         } catch (Exception $e) {
+            Logger::error('cron', 'Image metadata removal failed: ' . $e->getMessage(), [
+                'task' => 'image_expiration',
+                'image_id' => $imageId,
+            ]);
             echo "  [METADATA ERROR] {$imageId}: " . $e->getMessage() . "\n";
             $stats['deletion_errors']++;
         }
@@ -213,9 +228,18 @@ foreach ($deleteCandidates as $imageId => $image) {
                 return $data;
             });
         } catch (Exception $e) {
+            Logger::error('cron', 'Image delete error log failed: ' . $e->getMessage(), [
+                'task' => 'image_expiration',
+                'image_id' => $imageId,
+            ]);
             echo "  [ERROR LOG ERROR] {$imageId}: " . $e->getMessage() . "\n";
         }
         $stats['deletion_errors']++;
+        Logger::error('cron', 'S3 delete failed, metadata retained for retry', [
+            'task' => 'image_expiration',
+            'image_id' => $imageId,
+            'details' => $deleteResult['details'] ?? [],
+        ]);
         echo "  [DELETE ERROR] {$imageId}: metadata retained, will retry next run (" . substr($errorMessage, 0, 160) . ")\n";
     }
 }
@@ -234,6 +258,7 @@ try {
         return array_slice($logs, -30);
     });
 } catch (Exception $e) {
+    Logger::error('cron', 'Expiration log write failed: ' . $e->getMessage(), ['task' => 'image_expiration']);
     echo "  [LOG ERROR] " . $e->getMessage() . "\n";
 }
 
@@ -245,3 +270,13 @@ echo "Newly marked for deletion: {$stats['marked_for_deletion']}\n";
 echo "Deleted: {$stats['deleted']}\n";
 echo "Deletion errors: {$stats['deletion_errors']}\n";
 echo "[" . date('Y-m-d H:i:s') . "] Done.\n";
+
+Logger::info('cron', 'Image expiration run complete', [
+    'task' => 'image_expiration',
+    'checked' => $stats['checked'],
+    'skipped_user_owned' => $stats['skipped_user_owned'],
+    'still_active' => $stats['still_active'],
+    'marked_for_deletion' => $stats['marked_for_deletion'],
+    'deleted' => $stats['deleted'],
+    'deletion_errors' => $stats['deletion_errors'],
+]);

@@ -27,6 +27,7 @@ chdir(__DIR__ . '/..');
 // Load dependencies
 require_once __DIR__ . '/../includes/ImageHandler.php';
 require_once __DIR__ . '/../includes/RateLimiter.php';
+require_once __DIR__ . '/../includes/Logger.php';
 
 // Configuration
 define('TEMP_DIR', __DIR__ . '/../temp');
@@ -82,6 +83,7 @@ function cleanupTempFiles(): array
             'errors' => $result['errors'],
         ];
     } catch (Exception $e) {
+        Logger::error('cron', 'Temp cleanup failed: ' . $e->getMessage(), ['task' => 'temp_cleanup']);
         return [
             'success' => false,
             'error' => $e->getMessage(),
@@ -102,6 +104,7 @@ function cleanupRateLimitFiles(): array
             'deleted_files' => $deleted,
         ];
     } catch (Exception $e) {
+        Logger::error('cron', 'Rate limit cleanup failed: ' . $e->getMessage(), ['task' => 'ratelimit_cleanup']);
         return [
             'success' => false,
             'error' => $e->getMessage(),
@@ -164,6 +167,7 @@ function resetApiCounters(): array
             'message' => 'Database cleanup skipped: ' . $e->getMessage(),
         ];
     } catch (Exception $e) {
+        Logger::error('cron', 'API counter reset failed: ' . $e->getMessage(), ['task' => 'api_counters']);
         return [
             'success' => false,
             'error' => $e->getMessage(),
@@ -228,6 +232,7 @@ function checkS3Connectivity(): array
             'bucket' => $bucket,
         ];
     } catch (Exception $e) {
+        Logger::error('cron', 'S3 connectivity check failed: ' . $e->getMessage(), ['task' => 's3_check']);
         return [
             'success' => false,
             'error' => $e->getMessage(),
@@ -310,6 +315,7 @@ function runAbuseWatchdog(): array
             'expired_cleaned' => $watchdogReport['cleaned_expired'],
         ];
     } catch (Exception $e) {
+        Logger::error('cron', 'Abuse watchdog failed: ' . $e->getMessage(), ['task' => 'abuse_watchdog']);
         return [
             'success' => false,
             'error' => $e->getMessage(),
@@ -333,6 +339,14 @@ function logReport(array $report): void
     );
 
     file_put_contents(LOG_FILE, $logLine, FILE_APPEND | LOCK_EX);
+
+    Logger::info('cron', 'Maintenance run complete', [
+        'duration_ms' => $report['duration_ms'],
+        'temp_deleted' => $report['tasks']['temp_cleanup']['deleted_files'] ?? 0,
+        'ratelimit_deleted' => $report['tasks']['ratelimit_cleanup']['deleted_files'] ?? 0,
+        's3_ok' => (bool) ($report['tasks']['s3_check']['success'] ?? false),
+        'abuse_blocked' => $report['tasks']['abuse_watchdog']['auto_blocked'] ?? 0,
+    ]);
 }
 
 // Run maintenance

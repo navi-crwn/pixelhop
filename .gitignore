@@ -43,6 +43,7 @@ data/*.bak*
 # Logs
 *.log
 logs/
+data/logs/
 
 # OS files
 .DS_Store

@@ -333,4 +333,62 @@ CREATE TABLE `users` (
   KEY `idx_upload_token` (`upload_token`)
 ) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ------------------------------------------------------
+-- Reliability Fase 2 - Table structure for table `images`
+-- (ditambahkan 2026-09-11; timestamp epoch INT, updated_at DATETIME)
+-- ------------------------------------------------------
+
+DROP TABLE IF EXISTS `images`;
+CREATE TABLE `images` (
+  `id`                  varchar(64)  NOT NULL COMMENT 'Public ID (mis. slug_code)',
+  `user_id`             int(10) unsigned DEFAULT NULL COMMENT 'NULL = guest',
+  `ip`                  varchar(45)  NOT NULL DEFAULT '',
+  `filename`            varchar(255) NOT NULL DEFAULT '',
+  `mime_type`           varchar(64)  NOT NULL DEFAULT '',
+  `extension`           varchar(8)   NOT NULL DEFAULT '',
+  `size`                bigint(20) unsigned NOT NULL DEFAULT 0,
+  `width`               int(10) unsigned NOT NULL DEFAULT 0,
+  `height`              int(10) unsigned NOT NULL DEFAULT 0,
+  `hash`                varchar(64)  NOT NULL DEFAULT '' COMMENT 'sha256',
+  `urls`                json         DEFAULT NULL COMMENT 'array size=>proxyUrl (legacy fallback)',
+  `s3_keys`             json         NOT NULL COMMENT 'array size=>key',
+  `storage_providers`   json         DEFAULT NULL COMMENT 'array size=>r2|contabo',
+  `view_count`          bigint(20) unsigned NOT NULL DEFAULT 0,
+  `last_viewed_at`      int(10) unsigned DEFAULT NULL COMMENT 'epoch',
+  `delete_at`           int(10) unsigned DEFAULT NULL COMMENT 'epoch',
+  `marked_for_deletion` int(10) unsigned DEFAULT NULL COMMENT 'epoch',
+  `deleting_at`         int(10) unsigned DEFAULT NULL COMMENT 'epoch claim marker',
+  `last_delete_error`   json         DEFAULT NULL,
+  `created_at`          int(10) unsigned NOT NULL COMMENT 'epoch',
+  `updated_at`          datetime     DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_hash` (`hash`),
+  KEY `idx_user_created` (`user_id`,`created_at`),
+  KEY `idx_delete_at` (`delete_at`),
+  KEY `idx_marked` (`marked_for_deletion`),
+  KEY `idx_created_at` (`created_at`),
+  CONSTRAINT `fk_images_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------
+-- Reliability Fase 2 - Table structure for table `pending_operations`
+-- (ditambahkan 2026-09-11; created_at epoch INT, updated_at DATETIME)
+-- ------------------------------------------------------
+
+DROP TABLE IF EXISTS `pending_operations`;
+CREATE TABLE `pending_operations` (
+  `id`            bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `operation_id`  varchar(64)  NOT NULL COMMENT 'mis. image_id untuk upload',
+  `type`          varchar(32)  NOT NULL COMMENT 'upload|delete|tool',
+  `state`         enum('started','s3_uploaded','metadata_saved','completed','failed') NOT NULL DEFAULT 'started',
+  `payload`       json         DEFAULT NULL COMMENT 's3_keys, providers, size, user_id',
+  `attempts`      tinyint unsigned NOT NULL DEFAULT 0,
+  `last_error`    varchar(500) DEFAULT NULL,
+  `created_at`    int(10) unsigned NOT NULL COMMENT 'epoch',
+  `updated_at`    datetime     DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uidx_operation_id` (`operation_id`),
+  KEY `idx_state_created` (`state`,`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;

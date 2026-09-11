@@ -129,6 +129,65 @@ class Mailer
     }
     
     /**
+     * Send admin alert email (critical failure notification).
+     *
+     * Jalur sampingan untuk Alerter: method ini tidak boleh melempar
+     * exception ke pemanggil. Semua kegagalan SMTP ditangkap di sini,
+     * dicatat ke error_log, dan dikembalikan sebagai false.
+     *
+     * Recipient mengikuti urutan:
+     *   1. config/mail.php key 'admin_alerts_to'
+     *   2. environment variable ADMIN_ALERT_EMAIL
+     *   3. config/mail.php key 'admin_email'
+     *   4. config/mail.php key 'support_email'
+     *   5. config/mail.php key 'from_address' (fallback terakhir)
+     */
+    public function sendAdminAlert(string $subject, string $htmlBody): bool
+    {
+        try {
+            $mailer = $this->getMailer();
+
+            $mailer->addAddress($this->getAdminAlertRecipient());
+            $mailer->isHTML(true);
+            $mailer->Subject = $subject;
+            $mailer->Body = $htmlBody;
+            $mailer->AltBody = trim(strip_tags($htmlBody));
+
+            $mailer->send();
+            return true;
+
+        } catch (Throwable $e) {
+            error_log('Mailer Error (admin alert): ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Resolve recipient email untuk admin alert.
+     */
+    private function getAdminAlertRecipient(): string
+    {
+        if (!empty($this->config['admin_alerts_to'])) {
+            return (string) $this->config['admin_alerts_to'];
+        }
+
+        $env = getenv('ADMIN_ALERT_EMAIL');
+        if (is_string($env) && trim($env) !== '') {
+            return trim($env);
+        }
+
+        if (!empty($this->config['admin_email'])) {
+            return (string) $this->config['admin_email'];
+        }
+
+        if (!empty($this->config['support_email'])) {
+            return (string) $this->config['support_email'];
+        }
+
+        return (string) $this->config['from_address'];
+    }
+
+    /**
      * Verification email HTML template
      */
     private function getVerificationEmailHtml(string $email, string $verifyUrl, int $expireHours): string

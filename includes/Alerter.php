@@ -21,6 +21,10 @@
  * Tidak ada output saat file di-require (idempotent, tanpa side-effect).
  */
 
+require_once __DIR__ . '/Logger.php';
+require_once __DIR__ . '/Mailer.php';
+require_once __DIR__ . '/JsonStore.php';
+
 if (!class_exists('Alerter', false)) {
 
     final class Alerter

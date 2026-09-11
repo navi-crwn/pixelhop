@@ -76,7 +76,7 @@ final class ImageRepository
     {
         $images = $this->json()->read();
 
-        foreach ($images as $imageData) {
+        foreach ($images as $imageId => $imageData) {
             if (!empty($imageData['delete_at'])) {
                 continue;
             }
@@ -98,6 +98,7 @@ final class ImageRepository
             }
 
             if (!empty($imageData['hash']) && $imageData['hash'] === $hash) {
+                $imageData['id'] = $imageId;
                 return $imageData;
             }
         }
@@ -209,7 +210,7 @@ final class ImageRepository
      * Lepas klaim penghapusan (hapus deleting_at). Bila $error diberikan,
      * set last_delete_error untuk keperluan retry/debug.
      */
-    public function releaseClaim(string $id, ?string $error = null): void
+    public function releaseClaim(string $id, array|string|null $error = null): void
     {
         $this->json()->mutate(function (array $images) use ($id, $error): array {
             if (array_key_exists($id, $images) && is_array($images[$id])) {

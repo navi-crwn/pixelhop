@@ -95,6 +95,19 @@ require_once __DIR__ . '/../includes/Logger.php';
 // Single repository instance for the whole request (shared static store).
 $imageRepo = new ImageRepository();
 
+// Upload journal (crash recovery). Best-effort only: DB may be unavailable
+// in local/json-only dev, and a journal failure must never break an upload.
+$journal = null;
+try {
+    require_once __DIR__ . '/../includes/Database.php';
+    require_once __DIR__ . '/../includes/UploadJournal.php';
+    $journal = new UploadJournal(Database::getInstance());
+} catch (Throwable $journalInitException) {
+    Logger::error('upload', 'Upload journal init failed: ' . $journalInitException->getMessage(), [
+        'exception' => get_class($journalInitException),
+    ]);
+}
+
 // Bypass firewall for valid API token requests (e.g. Shottr)
 $_preAuthToken = $_SERVER['HTTP_X_UPLOAD_TOKEN'] ?? $_POST['upload_token'] ?? null;
 $_tokenBypass = false;
@@ -546,7 +559,31 @@ try {
     
     $s3Keys = [];
     $storageProviders = []; // Track which provider stores each size
-    
+
+    // Precompute the deterministic S3 keys we are about to create so the
+    // journal payload is meaningful even if the process dies mid-loop. The
+    // actual upload loop below uses the same key format unchanged.
+    $journalS3Keys = [];
+    foreach ($uploadedFiles as $sizeName => $fileInfo) {
+        $journalS3Keys[$sizeName] = date('Y/m/d', $timestamp) . '/' . $fileInfo['filename'];
+    }
+
+    // Crash recovery journal: record the S3 keys we are about to create so
+    // a reconcile cron can clean them up if we die before metadata is saved.
+    if ($journal instanceof UploadJournal) {
+        try {
+            $journal->open($imageId, 'upload', [
+                's3_keys' => $journalS3Keys,
+                'size' => $file['size'],
+                'user_id' => $uploadUserId,
+            ]);
+        } catch (Throwable $journalOpenException) {
+            Logger::error('upload', 'Upload journal open failed: ' . $journalOpenException->getMessage(), [
+                'exception' => get_class($journalOpenException),
+            ]);
+        }
+    }
+
     foreach ($uploadedFiles as $sizeName => $fileInfo) {
         $s3Key = date('Y/m/d', $timestamp) . '/' . $fileInfo['filename'];
         
@@ -565,6 +602,16 @@ try {
         $uploadedUrls[$sizeName] = $uploadResult['url'];
         $s3Keys[$sizeName] = $s3Key;
         $storageProviders[$sizeName] = $uploadResult['provider']; // 'r2' or 'contabo'
+    }
+
+    if ($journal instanceof UploadJournal) {
+        try {
+            $journal->progress($imageId, 's3_uploaded');
+        } catch (Throwable $journalProgressException) {
+            Logger::error('upload', 'Upload journal progress failed: ' . $journalProgressException->getMessage(), [
+                'exception' => get_class($journalProgressException),
+            ]);
+        }
     }
 
     $deleteAfter = $_POST['delete_after'] ?? 'never';
@@ -605,6 +652,16 @@ try {
 
     saveImageData($imageId, $imageData);
 
+    if ($journal instanceof UploadJournal) {
+        try {
+            $journal->progress($imageId, 'metadata_saved');
+            $journal->complete($imageId);
+        } catch (Throwable $journalCompleteException) {
+            Logger::error('upload', 'Upload journal complete failed: ' . $journalCompleteException->getMessage(), [
+                'exception' => get_class($journalCompleteException),
+            ]);
+        }
+    }
 
     if ($uploadUserId) {
         $db = Database::getInstance();
@@ -676,6 +733,18 @@ try {
         'exception' => get_class($e),
         'ip' => $clientIP,
     ]);
+
+    // Crash recovery journal: record the failure. Best-effort; the existing
+    // S3 compensation delete below stays as the primary cleanup path.
+    if ($journal instanceof UploadJournal) {
+        try {
+            $journal->fail($imageId, $e->getMessage());
+        } catch (Throwable $journalFailException) {
+            Logger::error('upload', 'Upload journal fail failed: ' . $journalFailException->getMessage(), [
+                'exception' => get_class($journalFailException),
+            ]);
+        }
+    }
 
     // Compensate: delete S3 variants that were already uploaded for this
     // image before the failure (quota exceeded, DB/JSON failure, etc).

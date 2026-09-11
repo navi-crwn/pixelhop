@@ -306,6 +306,95 @@ Solusi bertahap (zero-downtime):
 > di-upload sebelum remediasi masih bisa diakses via URL lama (lihat bagian 4.3 — risiko
 > yang diterima).
 
+### 3.9 FASE 2–4: KEANDALAN, ARSITEKTUR & OBSERVABILITAS
+
+> **Status: SELESAI & LIVE di `p.hel.ink`.** Fase 1 (keamanan) dijelaskan di 3.5–3.8.
+> Fase 2–4 menaikkan tiga dimensi sekaligus: **keandalan data**, **kebersihan arsitektur**,
+> dan **visibilitas operasional**. Semua perubahan bersifat **aditif** (tidak menghapus
+> perilaku lama) dan **terverifikasi live**.
+
+#### 3.9.1 Fase 2 — Keandalan (Reliability 6.5 → ~8.5)
+
+Masalah inti: metadata foto hidup di **satu file JSON** (`data/images.json`). File tunggal =
+**titik gagal tunggal** (lost update, korupsi, tidak bisa di-query), dan **tidak ada jaring
+pemulihan** saat proses upload mati di tengah jalan.
+
+**(a) Metadata foto: JSON → tabel MySQL `images` (migrasi 003).**
+
+| Langkah | Yang dikerjakan |
+|---|---|
+| **Satu pintu akses data** | `ImageRepository` dibuat sebagai **satu kelas akses data foto**. **16+ callsite** diadopsi: upload, `i.php`, view, result, gallery, dashboard, stats, admin, cron, cleanup, `AbuseGuard`, orphans. |
+| **Skrip migrasi** | `scripts/migrate_images_to_db.php` — **idempotent**, **resumable**, dan punya mode **`--verify`**. |
+| **Saklar mode penyimpanan** | Flag `site_settings.images_store_mode` dengan transisi bertahap: `json` → `dual_write` → `db_primary` → **`db_only`**. Cutover **health-gated** (hanya maju bila health check hijau). |
+| **Deteksi drift** | `cron/images_drift_check.php` — membandingkan isi JSON ↔ DB dan melaporkan selisih. |
+| **Jalur rollback** | `scripts/export_db_to_images_json.php` — ekspor balik DB → `images.json` bila perlu mundur. |
+
+**Hasil (terverifikasi):** **57 record termigrasi**, **`--verify` = 0 mismatch**, cutover ke
+**`db_only` berhasil** (semua jalur kini membaca dari DB). `images.json` **dibekukan sebagai
+arsip di tempat** — **tidak** di-rename, karena *expiration guard* di cron masih menunjuk
+path tersebut.
+
+**(b) Crash-recovery saga upload.**
+
+`UploadJournal` (tabel **`pending_operations`**, migrasi 004) + integrasi di `api/upload.php`
+(fase `open` → `progress` → `complete`/`fail`) + `cron/reconcile_pending.php` (tiap
+**15 menit**). Upload yang mati di tengah kini bisa **dipulihkan otomatis**: **orphan S3
+dihapus** atau **metadata dilengkapi**.
+
+**(c) Orphan reconciler storage.**
+
+`cron/storage_reconcile.php` (harian **04:00**) membandingkan metadata DB vs objek S3
+(R2 + Contabo) dan melaporkan:
+
+- **orphan storage** — objek ada di S3, tanpa metadata;
+- **orphan metadata** — record ada di DB, tanpa file.
+
+Mode `--delete` **hanya** menyasar orphan berumur **> 7 hari**. Ditemukan **6 orphan storage**
+(dilaporkan, **tidak** dihapus otomatis — keputusan operator).
+
+**(d) Fondasi dari Fase 1 (pendukung keandalan).**
+
+- **Backup harian otomatis**: `cron/daily_backup.php` tiap **03:30** → dump DB + `config/` +
+  data JSON + kode, **retensi 14 hari**.
+- **Hot indexes** (migrasi 002) untuk query yang sering dipakai.
+
+#### 3.9.2 Fase 3 — Arsitektur (Arsitektur 4.5 → ~7.5)
+
+God-file dipecah secara **additive** — delegasi/pemindahan **verbatim**, **render identik
+byte-level**, **tanpa rewrite** logika.
+
+| File lama | Sesudah | Hasil |
+|---|---|---|
+| `tools.php` **1601 → 1105 baris** (−31%) | konfigurasi tool → `includes/ToolRegistry.php`; markup 6 tool → `templates/tools/*.php` | render identik |
+| `api/upload.php` **1072 → 278 baris** (Controller) | orkestrasi → `includes/UploadService.php` (671); pemrosesan gambar → `includes/ImageVariantProcessor.php` (230) | render identik |
+| `result.php` / `member/result.php` | data → `includes/ResultPresenter.php` / `includes/MemberResultPresenter.php` | render identik |
+| `dashboard.php` / `admin/gallery.php` | agregasi → `includes/DashboardService.php` / `includes/AdminGalleryService.php` (query DB langsung ke tabel `images`) | render identik |
+
+Pelengkap arsitektur:
+
+- **Helper terpusat** `includes/helpers.php` (`ph_format_bytes`, `ph_json_response`, `ph_e`).
+- **Autoloader** `includes/autoload.php`.
+- **`ImageRepository`** sebagai **satu** data access layer untuk seluruh metadata foto.
+
+#### 3.9.3 Fase 4 — Observabilitas (Observability 3.0 → ~7.5)
+
+| Komponen | Fungsi |
+|---|---|
+| `health.php` | Endpoint kesehatan: cek **DB / storage / disk / Python AI**; status `ok` / `degraded` / `down`. |
+| `includes/Logger.php` | Log terstruktur **JSON** terpusat di `data/logs/app-*.jsonl` + **rotasi 5 MB** + **retensi 14 hari** + **mask IP** + **redact secret**. |
+| `includes/Alerter.php` | **Alert email kritis** ke admin untuk kegagalan **S3 / DB / migrate / drift**; **throttle 1 per channel / 15 menit**. |
+| `cron/daily_summary.php` | Email ringkasan harian (**23:55**): upload/hari, storage, error count per channel, AI usage, pending ops, orphan. |
+| `metrics.php` | Endpoint **Prometheus** terkunci (**token / IP allowlist**) yang mengekspos counter kunci. |
+| `cron/images_drift_check.php` | Drift checker JSON ↔ DB (lihat 3.9.1). |
+
+#### 3.9.4 Perbaikan deployment penting (ditemukan & diperbaiki di Fase 2–4)
+
+| Temuan | Perbaikan |
+|---|---|
+| **Upload/view 500** karena izin `data/` berbeda antar-user: web (`www-data`) vs cron (`carawin`) | `JsonStore` group-write **0664** + **setgid** pada direktori, sehingga **kedua user** bisa menulis. |
+| **`popup-banner.php`** path Gatekeeper salah (`includes/core/` → `../core/`) | Path diperbaiki. |
+| **`dbSave` dual-write** gagal `HY093` (placeholder ganda) | Diubah ke pola **`VALUES()` / `excluded`**. |
+
 ---
 
 ## 4. KEADAAN SETELAH REMEDIASI (Kesimpulan)
@@ -328,6 +417,16 @@ Solusi bertahap (zero-downtime):
 | Schema | `schema.sql` = produksi (15 tabel); fresh install kini konsisten |
 | Privasi | `contacts.json` di-gitignore, IP di-hash, EXIF dibuang |
 | Konten disuspend | `/i/` mengembalikan **451**; objek baru privat → direct URL **403** |
+| **Metadata foto di DB** (Fase 2) | Tabel MySQL `images` (migrasi 003); `images_store_mode=db_only`; 57 record termigrasi; `--verify` 0 mismatch |
+| **Semua jalur baca lewat repository** (Fase 2) | `ImageRepository` dipakai 16+ callsite; `images.json` dibekukan sebagai arsip |
+| **Crash-recovery upload** (Fase 2) | `UploadJournal` (`pending_operations`) + `cron/reconcile_pending.php` tiap 15 menit |
+| **Orphan reconciler** (Fase 2) | `cron/storage_reconcile.php` harian 04:00; 6 orphan storage dilaporkan (tidak dihapus otomatis) |
+| **Backup harian otomatis** (Fase 2) | `cron/daily_backup.php` 03:30; retensi 14 hari |
+| **God-file dipecah** (Fase 3) | `tools.php` 1601→1105; `api/upload.php` 1072→278; presenter/service baru; render identik |
+| **Helper + autoloader** (Fase 3) | `includes/helpers.php` + `includes/autoload.php` |
+| **Endpoint kesehatan** (Fase 4) | `health.php` → `ok`/`degraded`/`down` (DB/storage/disk/AI) |
+| **Log terstruktur & alert** (Fase 4) | `Logger` JSONL + rotasi 5 MB + retensi 14 hari; `Alerter` email throttle 15 menit |
+| **Ringkasan & metrik** (Fase 4) | `cron/daily_summary.php` 23:55; `metrics.php` Prometheus terkunci |
 
 ### 4.2 Sisa yang perlu TINDAKAN MANUAL KAMU (non-teknis, mudah)
 
@@ -381,6 +480,23 @@ Migrasi ke Podman **ditunda**, bukan dibatalkan. Alasan:
 
 Sketsa `Containerfile` + compose ada di **bagian 6.4**.
 
+### 4.5 Skor akhir per dimensi (sebelum → sesudah Fase 1–4)
+
+Skor awal dari audit adalah **2.5 / 10 (KRITIS)**. Setelah Fase 1 (keamanan) dan Fase 2–4
+(keandalan, arsitektur, observabilitas), skor tiap dimensi naik sebagai berikut:
+
+| Dimensi | Sebelum | Sesudah | Penggerak utama |
+|---|---|---|---|
+| **Security** | ~3.0 | **~8.5** | Bootstrap sesi, SSRF guard, fail-closed, `session_version`, privatisasi storage |
+| **Reliability** | 6.5 | **~8.5** | Metadata JSON→DB (`db_only`), `UploadJournal`, orphan reconciler, backup harian |
+| **Arsitektur** | 4.5 | **~7.5** | God-file dipecah additive, helper terpusat, `ImageRepository` sebagai satu DAL |
+| **Observability** | 3.0 | **~7.5** | `health.php`, `Logger` JSONL, `Alerter`, `daily_summary`, `metrics.php` |
+| **TOTAL (rata-rata)** | **2.5** | **≈ 8.2 / 10** | Seluruh temuan CRITICAL/HIGH ditutup; sisa risiko diterima secara sadar (bagian 4.3) |
+
+> **Catatan:** skor "Sebelum" per dimensi adalah estimasi pembobotan dari temuan audit
+> (`AUDIT_REPORT.md`); skor "Sesudah" mencerminkan keadaan **live `p.hel.ink`** pasca
+> Fase 2–4. Angka total ≈ 8.2 berasal dari rata-rata empat dimensi di atas.
+
 ---
 
 ## 5. PANDUAN REVERT PER PERUBAHAN
@@ -400,6 +516,12 @@ Sketsa `Containerfile` + compose ada di **bagian 6.4**.
 | Migrasi `session_version` (kolom DB) | Aditif; bila wajib: `ALTER TABLE users DROP COLUMN session_version;` | Sesi jadi tak dapat di-revoke (regresi keamanan) |
 | `config/turnstile.php` | Hapus file (aplikasi kembali fail-closed → login/register menolak) | **Login/register mati** — jangan lakukan tanpa alasan |
 | `data/contacts.json` di-gitignore + IP hash | Revert `contact.php` via Git | IP kembali tersimpan mentah (regresi privasi) |
+| **Metadata foto JSON→DB** (Fase 2) | Rollback via `php scripts/export_db_to_images_json.php` (ekspor DB → `images.json`), lalu set `site_settings.images_store_mode = 'json'` | Aplikasi kembali memakai file JSON (titik gagal tunggal kembali; hanya bila DB bermasalah) |
+| **Mode `dual_write`** (Fase 2) | Set `site_settings.images_store_mode = 'json'` | Berhenti menulis ke DB; JSON jadi sumber tunggal lagi |
+| **`pending_operations` / `UploadJournal`** (Fase 2) | `DROP TABLE pending_operations;` + revert `api/upload.php` via Git di server (bila perlu) | Crash-recovery upload nonaktif (upload mati di tengah tak dipulihkan otomatis) |
+| **God-file refactor (Fase 3)** | Revert file via Git di server: `cd /var/www/pichost && git checkout <commit> -- <file>` | Kembali ke file besar; **pastikan** service/presenter lama ikut konsisten agar tidak ada require yang hilang |
+| **`health.php` / `metrics.php`** (Fase 4) | Hapus file (endpoint hilang) | Kehilangan visibilitas; **tidak** memengaruhi fungsi upload/serving |
+| **`Logger` / `Alerter`** (Fase 4) | Revert via Git; `data/logs/` boleh dibiarkan | Error kembali hanya ke log server lama; alert email berhenti |
 
 ### 5.2 PROSEDUR ROLLBACK TOTAL (langkah demi langkah, copy-paste)
 

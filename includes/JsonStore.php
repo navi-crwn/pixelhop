@@ -326,12 +326,20 @@ final class JsonStore
             fclose($tfp);
         }
 
-        // Pertahankan permission file lama bila ada, bila tidak pakai 0644.
+        // Deploy: data JSON ditulis oleh dua user berbeda — PHP-FPM sebagai
+        // www-data dan cron sebagai carawin — yang keduanya anggota group
+        // yang sama. tempnam() membuat temp file 0600 dan rename()
+        // mempertahankan owner/perms temp, sehingga bila kita hanya menyalin
+        // perms lama (mis. 0644) atau fallback ke 0644, file hasil rename
+        // tidak group-writable dan user satunya (www-data) kehilangan akses
+        // tulis. Pertahankan perms lama bila ada, tapi PASTIKAN bit
+        // group-write selalu aktif (dari 0644 menjadi 0664) agar web dan
+        // cron sama-sama tetap bisa menulis.
         $perms = @fileperms($this->filePath);
         if ($perms !== false) {
-            @chmod($tmp, $perms & 0777);
+            @chmod($tmp, ($perms & 0777) | 0020);
         } else {
-            @chmod($tmp, 0644);
+            @chmod($tmp, 0664);
         }
 
         if (!@rename($tmp, $this->filePath)) {

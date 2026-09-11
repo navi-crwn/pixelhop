@@ -4,7 +4,7 @@
  * Include this file on pages where you want to show the popup banner
  */
 
-require_once __DIR__ . '/core/Gatekeeper.php';
+require_once __DIR__ . '/../core/Gatekeeper.php';
 
 $gatekeeper = new Gatekeeper();
 

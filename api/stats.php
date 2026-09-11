@@ -23,26 +23,11 @@ if (!isAuthenticated() || !isAdmin()) {
 }
 
 $config = require __DIR__ . '/../config/s3.php';
-$imagesFile = __DIR__ . '/../data/images.json';
+require_once __DIR__ . '/../includes/ImageRepository.php';
+$repo = new ImageRepository();
 
-// Baca images.json SATU kali saja.
-$images = [];
-if (is_file($imagesFile)) {
-    $raw = @file_get_contents($imagesFile);
-    if ($raw === false) {
-        Logger::error('stats', 'Failed to read images data file', ['file' => basename($imagesFile)]);
-    } else {
-        $decoded = json_decode($raw, true);
-        if (is_array($decoded)) {
-            $images = $decoded;
-        } elseif (trim($raw) !== '') {
-            Logger::error('stats', 'Corrupt images data file', [
-                'file' => basename($imagesFile),
-                'json_error' => json_last_error_msg(),
-            ]);
-        }
-    }
-}
+// Baca images.json SATU kali saja (lewat ImageRepository).
+$images = $repo->readAll();
 
 // ---------------------------------------------------------------------------
 // Agregasi satu pass.

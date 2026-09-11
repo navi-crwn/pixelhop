@@ -23,21 +23,18 @@ $imageId = trim($path, '/');
 // New format: {filename-slug}_{unique-code} e.g., "rumah-baru_a3x9K2"
 $imageId = preg_replace('/[^a-zA-Z0-9_\-]/', '', $imageId);
 
-// Load image data
-$dataFile = __DIR__ . '/data/images.json';
-require_once __DIR__ . '/includes/JsonStore.php';
-$store = new JsonStore($dataFile);
-$images = $store->read();
+// Load image data via ImageRepository (satu-satunya akses data foto).
+require_once __DIR__ . '/includes/ImageRepository.php';
+$repo = new ImageRepository();
+$image = $repo->find($imageId);
 
 // Check if image exists
-if (empty($imageId) || !isset($images[$imageId])) {
+if (empty($imageId) || $image === null) {
 
     http_response_code(404);
     include __DIR__ . '/404.php';
     exit;
 }
-
-$image = $images[$imageId];
 
 // Check if image owner's account is suspended
 $imageOwnerSuspended = false;
@@ -90,31 +87,19 @@ if ($imageOwnerSuspended) {
     exit;
 }
 
-// Track view count and last_viewed_at for all images
+// Track view count and last_viewed_at for all images.
+// ImageRepository::markViewed() melakukan counter + last_viewed_at + hapus
+// marked_for_deletion dalam satu mutate atomik.
 $now = time();
 $lastViewed = $image['last_viewed_at'] ?? 0;
 
 // Only update once per hour per image to reduce disk writes
 if ($now - $lastViewed > 3600) {
-    $images = $store->mutate(function($images) use ($imageId, $now) {
-        if (!isset($images[$imageId])) {
-            return $images;
-        }
+    $repo->markViewed($imageId);
 
-        // Increment view count
-        $images[$imageId]['view_count'] = ($images[$imageId]['view_count'] ?? 0) + 1;
-        $images[$imageId]['last_viewed_at'] = $now;
-
-        // For guest uploads: clear any pending deletion marker since image was viewed
-        if (empty($images[$imageId]['user_id'])) {
-            unset($images[$imageId]['marked_for_deletion']);
-        }
-
-        return $images;
-    });
-
-    // Reload image data after save
-    $image = $images[$imageId] ?? $image;
+    // Reload image data after save (counter bertambah 1, guest image tidak
+    // lagi ditandai hapus).
+    $image = $repo->find($imageId) ?? $image;
 }
 
 $siteUrl = $config['site']['url'];

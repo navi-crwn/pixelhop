@@ -9,10 +9,11 @@
  * Run: crontab -e
  * 0 2 * * * php /var/www/pichost/cron/image_expiration.php >> /var/log/pichost/expiration.log 2>&1
  *
- * D4-01/D4-02/D4-07: semua mutasi images.json memakai JsonStore RMW
- * (flock + temp file + rename). Metadata TIDAK pernah dihapus sebelum semua
- * delete S3 sukses. Bila delete S3 gagal, penanda `deleting_at` dilepas dan
- * `last_delete_error` dicatat supaya retry otomatis pada run berikutnya.
+ * D4-01/D4-02/D4-07: semua mutasi metadata memakai ImageRepository
+ * (yang backend-nya JsonStore RMW: flock + temp file + rename). Metadata
+ * TIDAK pernah dihapus sebelum semua delete S3 sukses. Bila delete S3
+ * gagal, penanda `deleting_at` dilepas dan `last_delete_error` dicatat
+ * supaya retry otomatis pada run berikutnya.
  */
 
 // CLI only
@@ -29,8 +30,12 @@ $config = require ROOT_PATH . '/config/s3.php';
 require_once ROOT_PATH . '/includes/R2StorageManager.php';
 $r2 = new R2StorageManager($config);
 
-// Load JsonStore for atomic RMW access to images.json (D2-05, D4-07)
+// Load JsonStore untuk backup file data dan log expiration (D4-07).
+// Akses metadata images.json dimediasi lewat ImageRepository.
 require_once ROOT_PATH . '/includes/JsonStore.php';
+
+// Load ImageRepository (SATU kelas resmi untuk semua akses data foto)
+require_once ROOT_PATH . '/includes/ImageRepository.php';
 
 // Structured logger (dual-write: error_log + data/logs/app-*.jsonl)
 require_once ROOT_PATH . '/includes/Logger.php';
@@ -38,8 +43,10 @@ require_once ROOT_PATH . '/includes/Logger.php';
 $dataFile = ROOT_PATH . '/data/images.json';
 $logFile = ROOT_PATH . '/data/expiration_log.json';
 
+// JsonStore khusus untuk backup file data (bukan untuk baca/tulis metadata).
 $store = new JsonStore($dataFile);
 $logStore = new JsonStore($logFile);
+$repo = new ImageRepository();
 
 echo "[" . date('Y-m-d H:i:s') . "] Starting image expiration check...\n";
 
@@ -51,11 +58,6 @@ if ($backupPath !== null) {
 
 if (!is_file($dataFile)) {
     die("Error: images.json not found\n");
-}
-
-$images = $store->read();
-if (!is_array($images)) {
-    die("Error: Invalid images.json format\n");
 }
 
 $now = time();
@@ -73,11 +75,12 @@ $stats = [
 
 // Tahap 1 (seleksi, read-only): kumpulkan kandidat delete dan kandidat mark
 // tanpa memegang lock. Mutasi aktual dilakukan per-item di tahap 2 via
-// JsonStore::mutate() sehingga tidak ada baca-penuh-lalu-timpa.
+// ImageRepository (yang memakai JsonStore::mutate()) sehingga tidak ada
+// baca-penuh-lalu-timpa.
 $deleteCandidates = [];
 $markCandidates = [];
 
-foreach ($images as $imageId => $image) {
+foreach ($repo->iterateAll() as $imageId => $image) {
     $stats['checked']++;
 
     // Skip user-owned images (registered users)
@@ -113,15 +116,11 @@ foreach ($images as $imageId => $image) {
     }
 }
 
-// Tahap 2a (mark): tandai kandidat via JsonStore::mutate() satu per satu.
+// Tahap 2a (mark): tandai kandidat via ImageRepository::markForDeletion()
+// satu per satu.
 foreach ($markCandidates as $imageId => $image) {
     try {
-        $store->mutate(function (array $data) use ($imageId, $now): array {
-            if (isset($data[$imageId]) && empty($data[$imageId]['user_id'])) {
-                $data[$imageId]['marked_for_deletion'] = $now;
-            }
-            return $data;
-        });
+        $repo->markForDeletion($imageId);
         $stats['marked_for_deletion']++;
     } catch (Exception $e) {
         Logger::error('cron', 'Image mark for deletion failed: ' . $e->getMessage(), [
@@ -137,26 +136,9 @@ foreach ($markCandidates as $imageId => $image) {
 // HANYA bila semua delete S3 sukses. Gagal => hapus `deleting_at` dan catat
 // `last_delete_error`; metadata tetap utuh untuk retry run berikutnya.
 foreach ($deleteCandidates as $imageId => $image) {
-    // Tandai di dalam lock agar run lain tidak memproses item yang sama.
-    $claimed = false;
+    // Klaim item agar run lain tidak memproses item yang sama (anti double-claim).
     try {
-        $store->mutate(function (array $data) use ($imageId, $now, &$claimed): array {
-            if (!isset($data[$imageId])) {
-                return $data;
-            }
-
-            // Sudah ditandai proses oleh proses lain dan belum basi.
-            if (!empty($data[$imageId]['deleting_at']) && ($now - (int)$data[$imageId]['deleting_at']) < 3600) {
-                return $data;
-            }
-
-            $data[$imageId]['deleting_at'] = $now;
-            $claimed = true;
-            return $data;
-        });
-
-        // Pastikan marker dipasang oleh proses ini sebelum delete S3 dimulai.
-        if (!$claimed) {
+        if (!$repo->claimForDeletion($imageId)) {
             echo "  [SKIP] {$imageId} - already being deleted by another process\n";
             continue;
         }
@@ -198,10 +180,7 @@ foreach ($deleteCandidates as $imageId => $image) {
     if ($allS3Succeeded) {
         // Semua delete S3 sukses: metadata boleh dihapus.
         try {
-            $store->mutate(function (array $data) use ($imageId): array {
-                unset($data[$imageId]);
-                return $data;
-            });
+            $repo->delete($imageId);
             $stats['deleted']++;
             echo "  [REMOVED] {$imageId} from database\n";
         } catch (Exception $e) {
@@ -217,16 +196,10 @@ foreach ($deleteCandidates as $imageId => $image) {
         // Lepas marker `deleting_at` agar bisa diretried dan catat error.
         $errorMessage = 'S3 delete failed: ' . json_encode($deleteResult['details'] ?? []);
         try {
-            $store->mutate(function (array $data) use ($imageId, $now, $errorMessage): array {
-                if (isset($data[$imageId])) {
-                    unset($data[$imageId]['deleting_at']);
-                    $data[$imageId]['last_delete_error'] = [
-                        'timestamp' => $now,
-                        'message' => substr($errorMessage, 0, 500),
-                    ];
-                }
-                return $data;
-            });
+            $repo->releaseClaim($imageId, [
+                'timestamp' => $now,
+                'message' => substr($errorMessage, 0, 500),
+            ]);
         } catch (Exception $e) {
             Logger::error('cron', 'Image delete error log failed: ' . $e->getMessage(), [
                 'task' => 'image_expiration',

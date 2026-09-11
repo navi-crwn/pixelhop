@@ -47,18 +47,17 @@ $ocrUsed = $currentUser['daily_ocr_count'] ?? 0;
 $rembgUsed = $currentUser['daily_removebg_count'] ?? 0;
 
 // Get user's recent uploads - filter by user_id
-$imagesFile = __DIR__ . '/data/images.json';
-$userImages = [];
-if (file_exists($imagesFile)) {
-    $allImages = json_decode(file_get_contents($imagesFile), true) ?: [];
+require_once __DIR__ . '/includes/ImageRepository.php';
+$repo = new ImageRepository();
 
-    $myImages = array_filter($allImages, function($img) use ($currentUser) {
-        return isset($img['user_id']) && $img['user_id'] == $currentUser['id'];
-    });
+$allImages = $repo->readAll();
 
-    usort($myImages, fn($a, $b) => ($b['created_at'] ?? 0) - ($a['created_at'] ?? 0));
-    $userImages = array_slice($myImages, 0, 6);
-}
+$myImages = array_filter($allImages, function($img) use ($currentUser) {
+    return isset($img['user_id']) && $img['user_id'] == $currentUser['id'];
+});
+
+usort($myImages, fn($a, $b) => ($b['created_at'] ?? 0) - ($a['created_at'] ?? 0));
+$userImages = array_slice($myImages, 0, 6);
 
 // Get recent tool usage
 $userId = $currentUser['id'];

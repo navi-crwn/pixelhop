@@ -7,6 +7,7 @@
 require_once __DIR__ . '/../includes/bootstrap.php';
 require_once __DIR__ . '/../auth/middleware.php';
 require_once __DIR__ . '/../includes/Database.php';
+require_once __DIR__ . '/../includes/ImageRepository.php';
 require_once __DIR__ . '/../core/Gatekeeper.php';
 
 if (!isAuthenticated() || !isAdmin()) {
@@ -50,13 +51,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 $totalUsers = $db->query("SELECT COUNT(*) FROM users")->fetchColumn();
 $totalImages = 0;
 $totalStorageUsed = 0;
-$imagesFile = __DIR__ . '/../data/images.json';
-if (file_exists($imagesFile)) {
-    $images = json_decode(file_get_contents($imagesFile), true) ?: [];
-    $totalImages = count($images);
-    foreach ($images as $img) {
-        $totalStorageUsed += $img['size'] ?? 0;
-    }
+$images = (new ImageRepository())->readAll();
+$totalImages = count($images);
+foreach ($images as $img) {
+    $totalStorageUsed += $img['size'] ?? 0;
 }
 
 if ($totalStorageUsed > 0 && ($health['storage']['global_used'] ?? 0) == 0) {

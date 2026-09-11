@@ -17,20 +17,19 @@ if (empty($resultId) && $errorCount === 0) {
 // Load config
 $config = require __DIR__ . '/config/s3.php';
 
-// Load images data
-$dataFile = __DIR__ . '/data/images.json';
+// Load images data via ImageRepository (per-id lookup, bukan baca penuh).
+require_once __DIR__ . '/includes/ImageRepository.php';
+$repo = new ImageRepository();
 $images = [];
 
-if (!empty($resultId) && file_exists($dataFile)) {
-    $allImages = json_decode(file_get_contents($dataFile), true) ?: [];
-
-
+if (!empty($resultId)) {
     $imageIds = explode(',', $resultId);
 
     foreach ($imageIds as $id) {
         $id = trim($id);
-        if (isset($allImages[$id])) {
-            $images[$id] = $allImages[$id];
+        $image = $repo->find($id);
+        if ($image !== null) {
+            $images[$id] = $image;
         }
     }
 }

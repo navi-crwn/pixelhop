@@ -31,6 +31,7 @@ if (session_status() === PHP_SESSION_NONE && function_exists('session_cache_limi
 require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/includes/Database.php';
 require_once __DIR__ . '/includes/JsonStore.php';
+require_once __DIR__ . '/includes/ImageRepository.php';
 require_once __DIR__ . '/includes/ClientIp.php';
 require_once __DIR__ . '/includes/R2StorageManager.php';
 
@@ -228,9 +229,8 @@ if (!pixelhop_image_rate_limit_allow(
 // Lookup metadata gambar
 // ---------------------------------------------------------------------------
 
-$imageStore = new JsonStore(__DIR__ . '/data/images.json');
-$images = $imageStore->read();
-$image = $images[$imageId] ?? null;
+$repo = new ImageRepository();
+$image = $repo->find($imageId);
 
 if (!is_array($image)) {
     pixelhop_image_send_text(404, 'Image not found');

@@ -107,13 +107,13 @@ if (!in_array($reason, $validReasons)) {
     exit;
 }
 
-// D4-09: verifikasi image ada. Bila images.json tidak ada ATAU key tidak
-// ditemukan, balas 404 (sebelumnya lolos saat file tidak ada).
-$imagesFile = __DIR__ . '/../data/images.json';
-$imagesStore = new JsonStore($imagesFile);
-$images = $imagesStore->read();
+// D4-09: verifikasi image ada. Repo images.json dipakai untuk cek
+// keberadaan; bila file/key tidak ada, balas 404 (sebelumnya lolos saat
+// file tidak ada).
+require_once __DIR__ . '/../includes/ImageRepository.php';
+$imageRepo = new ImageRepository();
 
-if (!is_file($imagesFile) || !isset($images[$imageId])) {
+if (!$imageRepo->exists($imageId)) {
     http_response_code(404);
     echo json_encode(['success' => false, 'error' => 'Image not found']);
     exit;

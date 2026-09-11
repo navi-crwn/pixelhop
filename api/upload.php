@@ -89,8 +89,11 @@ require_once __DIR__ . '/../includes/bootstrap.php';
 require_once __DIR__ . '/../includes/SecurityFirewall.php';
 require_once __DIR__ . '/../includes/R2StorageManager.php';
 require_once __DIR__ . '/../includes/ImageHandler.php';
-require_once __DIR__ . '/../includes/JsonStore.php';
+require_once __DIR__ . '/../includes/ImageRepository.php';
 require_once __DIR__ . '/../includes/Logger.php';
+
+// Single repository instance for the whole request (shared static store).
+$imageRepo = new ImageRepository();
 
 // Bypass firewall for valid API token requests (e.g. Shottr)
 $_preAuthToken = $_SERVER['HTTP_X_UPLOAD_TOKEN'] ?? $_POST['upload_token'] ?? null;
@@ -771,8 +774,8 @@ function slugifyFilename($filename) {
  * Example: "rumah-baru_a3x9K2"
  */
 function generateId($filename = null) {
-    // D5-18: 10-char unique code with JsonStore collision checks (max 5 tries).
-    $store = new JsonStore(__DIR__ . '/../data/images.json');
+    // D5-18: 10-char unique code with ImageRepository collision checks (max 5 tries).
+    global $imageRepo;
 
     for ($attempt = 0; $attempt < 5; $attempt++) {
         $uniqueCode = generateShortId(10);
@@ -788,8 +791,7 @@ function generateId($filename = null) {
             $imageId = $uniqueCode;
         }
 
-        $existing = $store->read();
-        if (!array_key_exists($imageId, $existing)) {
+        if (!$imageRepo->exists($imageId)) {
             return $imageId;
         }
     }
@@ -945,11 +947,8 @@ function saveImage($image, $filepath, $mimeType, $quality) {
  * Save image data to JSON database
  */
 function saveImageData($imageId, $data) {
-    $store = new JsonStore(__DIR__ . '/../data/images.json');
-    $store->mutate(function (array $images) use ($imageId, $data): array {
-        $images[$imageId] = $data;
-        return $images;
-    });
+    global $imageRepo;
+    $imageRepo->save($imageId, $data);
 }
 
 /**
@@ -998,35 +997,7 @@ function jsonResponse($success, $error = null, $code = 200, $data = []) {
  * Images owned by someone else are never reused.
  */
 function findDuplicateImage($hash, $size, $sessionUserId, $clientIP) {
-    $store = new JsonStore(__DIR__ . '/../data/images.json');
-    $images = $store->read();
+    global $imageRepo;
 
-    foreach ($images as $imageData) {
-
-        if (!empty($imageData['delete_at'])) {
-            continue;
-        }
-
-        $recordUserId = isset($imageData['user_id']) ? (int) $imageData['user_id'] : 0;
-
-        if ($sessionUserId) {
-            if ($recordUserId !== (int) $sessionUserId) {
-                continue;
-            }
-        } else {
-            // Both must be guest uploads and the recorded IP must match.
-            if ($recordUserId !== 0) {
-                continue;
-            }
-            if (($imageData['ip'] ?? '') !== $clientIP) {
-                continue;
-            }
-        }
-
-        if (!empty($imageData['hash']) && $imageData['hash'] === $hash) {
-            return $imageData;
-        }
-    }
-
-    return null;
+    return $imageRepo->findDuplicate($hash, $size, $sessionUserId, $clientIP);
 }

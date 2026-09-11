@@ -18,9 +18,8 @@ $isAdmin = isAdmin();
 $currentUserId = $currentUser['id'] ?? null;
 $csrfToken = generateCsrfToken();
 
-$imagesFile = __DIR__ . '/data/images.json';
-require_once __DIR__ . '/includes/JsonStore.php';
-$store = new JsonStore($imagesFile);
+require_once __DIR__ . '/includes/ImageRepository.php';
+$repo = new ImageRepository();
 
 // Handle AJAX delete requests
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
@@ -45,7 +44,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
             exit;
         }
         
-        if (!file_exists($imagesFile)) {
+        $allImages = $repo->readAll();
+        if (empty($allImages)) {
             echo json_encode(['success' => false, 'error' => 'No images found']);
             exit;
         }
@@ -53,35 +53,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
         $deleted = 0;
         $errors = [];
         
-        $store->mutate(function($images) use ($imageIds, $isAdmin, $currentUserId, $storageManager, &$deleted, &$errors) {
-            foreach ($imageIds as $imageId) {
-                if (!isset($images[$imageId])) {
-                    $errors[] = "$imageId not found";
-                    continue;
-                }
-                
-                // Only allow users to delete their own images
-                if (!$isAdmin && ($images[$imageId]['user_id'] ?? null) != $currentUserId) {
-                    $errors[] = "$imageId: permission denied";
-                    continue;
-                }
-                
-                $imgData = $images[$imageId];
-                
-                // Delete from storage (R2 and Contabo)
-                if (!empty($imgData['s3_keys'])) {
-                    $deleteResult = $storageManager->deleteImage($imgData['s3_keys'], $imgData['size'] ?? 0);
-                    if (!$deleteResult['success']) {
-                        $errors[] = "$imageId: storage error";
-                    }
-                }
-                
-                unset($images[$imageId]);
-                $deleted++;
+        foreach ($imageIds as $imageId) {
+            if (!isset($allImages[$imageId])) {
+                $errors[] = "$imageId not found";
+                continue;
             }
             
-            return $images;
-        });
+            // Only allow users to delete their own images
+            if (!$isAdmin && ($allImages[$imageId]['user_id'] ?? null) != $currentUserId) {
+                $errors[] = "$imageId: permission denied";
+                continue;
+            }
+            
+            $imgData = $allImages[$imageId];
+            
+            // Delete from storage (R2 and Contabo)
+            if (!empty($imgData['s3_keys'])) {
+                $deleteResult = $storageManager->deleteImage($imgData['s3_keys'], $imgData['size'] ?? 0);
+                if (!$deleteResult['success']) {
+                    $errors[] = "$imageId: storage error";
+                }
+            }
+            
+            $repo->delete($imageId);
+            $deleted++;
+        }
         
         echo json_encode([
             'success' => true, 
@@ -104,7 +100,7 @@ $offset = ($page - 1) * $perPage;
 $sort = $_GET['sort'] ?? 'newest';
 
 $userImages = [];
-$allImages = $store->read();
+$allImages = $repo->readAll();
 foreach ($allImages as $id => $img) {
     if (isset($img['user_id']) && $img['user_id'] == $currentUserId) {
         $img['id'] = $id;

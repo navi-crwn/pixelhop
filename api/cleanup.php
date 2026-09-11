@@ -33,25 +33,25 @@ $config = require __DIR__ . '/../config/s3.php';
 require_once __DIR__ . '/../includes/R2StorageManager.php';
 $storageManager = new R2StorageManager($config);
 
-// D2-05 / D4-02: gunakan JsonStore untuk baca & tulis images.json (RMW aman).
-require_once __DIR__ . '/../includes/JsonStore.php';
+// D2-05 / D4-02: akses metadata images.json dimediasi lewat ImageRepository
+// (yang memakai JsonStore untuk baca & tulis RMW aman).
+require_once __DIR__ . '/../includes/ImageRepository.php';
 
 $dataFile = __DIR__ . '/../data/images.json';
-$store = new JsonStore($dataFile);
+$repo = new ImageRepository();
 
 if (!is_file($dataFile)) {
     echo "No images file found.\n";
     exit(0);
 }
 
-$images = $store->read();
 $currentTime = time();
 $deletedCount = 0;
 $checkedCount = 0;
 $errorCount = 0;
 
 $candidates = [];
-foreach ($images as $imageId => $imageData) {
+foreach ($repo->iterateAll() as $imageId => $imageData) {
     $checkedCount++;
 
     if (!empty($imageData['delete_at']) && $imageData['delete_at'] <= $currentTime) {
@@ -95,10 +95,7 @@ foreach ($candidates as $imageId => $imageData) {
 
     if ($allS3Succeeded) {
         try {
-            $store->mutate(function (array $data) use ($imageId): array {
-                unset($data[$imageId]);
-                return $data;
-            });
+            $repo->delete($imageId);
             $deletedCount++;
             echo "  - Metadata removed: {$imageId}\n";
         } catch (Exception $e) {
@@ -109,15 +106,14 @@ foreach ($candidates as $imageId => $imageData) {
         // JANGAN hapus metadata bila S3 gagal sebagian/seluruhnya (D4-02).
         $message = 'S3 delete failed: ' . json_encode($deleteResult['details'] ?? []);
         try {
-            $store->mutate(function (array $data) use ($imageId, $currentTime, $message): array {
-                if (isset($data[$imageId])) {
-                    $data[$imageId]['last_delete_error'] = [
-                        'timestamp' => $currentTime,
-                        'message' => substr($message, 0, 500),
-                    ];
-                }
-                return $data;
-            });
+            if ($repo->exists($imageId)) {
+                $current = $repo->find($imageId) ?? $imageData;
+                $current['last_delete_error'] = [
+                    'timestamp' => $currentTime,
+                    'message' => substr($message, 0, 500),
+                ];
+                $repo->save($imageId, $current);
+            }
         } catch (Exception $e) {
             echo "  - Failed to record delete error: {$imageId} (" . $e->getMessage() . ")\n";
         }

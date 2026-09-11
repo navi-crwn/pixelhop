@@ -9,6 +9,7 @@ require_once __DIR__ . '/../auth/middleware.php';
 require_once __DIR__ . '/../includes/Database.php';
 require_once __DIR__ . '/../core/AbuseGuard.php';
 require_once __DIR__ . '/../includes/JsonStore.php';
+require_once __DIR__ . '/../includes/ImageRepository.php';
 
 if (!isAuthenticated() || !isAdmin()) {
     header('Location: /login.php?error=access_denied');
@@ -17,6 +18,7 @@ if (!isAuthenticated() || !isAdmin()) {
 
 $db = Database::getInstance();
 $abuseGuard = new AbuseGuard();
+$imageRepo = new ImageRepository();
 
 // Handle AJAX actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -101,19 +103,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $s3Config = require __DIR__ . '/../config/s3.php';
                 $storageManager = new R2StorageManager($s3Config);
                 
-                $imagesFile = __DIR__ . '/../data/images.json';
-                if (file_exists($imagesFile)) {
-                    $imagesStore = new JsonStore($imagesFile);
-                    $imagesStore->mutate(function($images) use ($imageId, $storageManager) {
-                        if (isset($images[$imageId])) {
-                            $imgData = $images[$imageId];
-                            if (!empty($imgData['s3_keys'])) {
-                                $storageManager->deleteImage($imgData['s3_keys'], $imgData['size'] ?? 0);
-                            }
-                            unset($images[$imageId]);
-                        }
-                        return $images;
-                    });
+                $imgData = $imageRepo->find($imageId);
+                if ($imgData !== null) {
+                    if (!empty($imgData['s3_keys'])) {
+                        $storageManager->deleteImage($imgData['s3_keys'], $imgData['size'] ?? 0);
+                    }
+                    $imageRepo->delete($imageId);
                 }
                 
                 file_put_contents($reportsFile, json_encode($reports, JSON_PRETTY_PRINT), LOCK_EX);

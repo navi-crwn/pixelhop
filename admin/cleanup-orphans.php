@@ -17,21 +17,18 @@ if (php_sapi_name() !== 'cli') {
 }
 
 require_once __DIR__ . '/../includes/R2StorageManager.php';
+require_once __DIR__ . '/../includes/ImageRepository.php';
 
 $config = require __DIR__ . '/../config/s3.php';
-$imagesFile = __DIR__ . '/../data/images.json';
 
 $dryRun = !in_array('--delete', $argv);
 
 echo "=== PixelHop Orphan Cleanup ===\n";
 echo "Mode: " . ($dryRun ? "DRY RUN (use --delete to actually delete)" : "DELETE MODE") . "\n\n";
 
-// Load images.json
-if (!file_exists($imagesFile)) {
-    die("Error: images.json not found\n");
-}
-
-$images = json_decode(file_get_contents($imagesFile), true) ?: [];
+// Load images metadata via ImageRepository (single access point)
+$imageRepo = new ImageRepository();
+$images = $imageRepo->readAll();
 echo "Loaded " . count($images) . " images from database\n";
 
 // Build set of valid S3 keys

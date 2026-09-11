@@ -13,10 +13,12 @@
 
 require_once __DIR__ . '/../includes/Database.php';
 require_once __DIR__ . '/../includes/JsonStore.php';
+require_once __DIR__ . '/../includes/ImageRepository.php';
 
 class AbuseGuard
 {
     private PDO $db;
+    private ImageRepository $imageRepo;
     private array $settings = [];
     private static bool $preflightChecked = false;
     private static ?bool $preflightTablesExist = null;
@@ -43,6 +45,7 @@ class AbuseGuard
     public function __construct()
     {
         $this->db = Database::getInstance();
+        $this->imageRepo = new ImageRepository();
         $this->runPreflight();
         $this->loadSettings();
     }
@@ -321,7 +324,7 @@ class AbuseGuard
     /**
      * Get upload count for IP in time period.
      *
-     * Membaca counter JsonStore (bukan full-scan images.json) untuk jendela
+     * Membaca counter (bukan full-scan metadata foto) untuk jendela
      * yang dipakai aplikasi (1 jam & 24 jam). Fallback full-scan hanya untuk
      * jendela lain yang tidak memiliki counter.
      */
@@ -406,43 +409,44 @@ class AbuseGuard
 
     /**
      * Full-scan fallback (images.json) untuk jendela > 1 jam.
+     *
+     * Sumber data lewat ImageRepository (generator yield [id => data]) agar
+     * akses metadata terpusat; logika filter identik dengan versi sebelumnya.
      */
     private function scanImagesForCount(string $ip, int $sinceTimestamp): int
     {
-        $imagesFile = __DIR__ . '/../data/images.json';
-        if (!file_exists($imagesFile)) {
+        try {
+            $count = 0;
+
+            foreach ($this->imageRepo->iterateAll() as $id => $img) {
+                if (($img['ip'] ?? '') === $ip && ($img['created_at'] ?? 0) >= $sinceTimestamp) {
+                    $count++;
+                }
+            }
+
+            return $count;
+        } catch (Throwable $e) {
+            error_log('AbuseGuard: scanImagesForCount failed - ' . $e->getMessage());
             return 0;
         }
-
-        $images = json_decode(file_get_contents($imagesFile), true) ?: [];
-        $count = 0;
-
-        foreach ($images as $img) {
-            if (($img['ip'] ?? '') === $ip && ($img['created_at'] ?? 0) >= $sinceTimestamp) {
-                $count++;
-            }
-        }
-
-        return $count;
     }
 
     private function scanImagesForBandwidth(string $ip, int $sinceTimestamp): int
     {
-        $imagesFile = __DIR__ . '/../data/images.json';
-        if (!file_exists($imagesFile)) {
+        try {
+            $totalBytes = 0;
+
+            foreach ($this->imageRepo->iterateAll() as $id => $img) {
+                if (($img['ip'] ?? '') === $ip && ($img['created_at'] ?? 0) >= $sinceTimestamp) {
+                    $totalBytes += $img['size'] ?? 0;
+                }
+            }
+
+            return $totalBytes;
+        } catch (Throwable $e) {
+            error_log('AbuseGuard: scanImagesForBandwidth failed - ' . $e->getMessage());
             return 0;
         }
-
-        $images = json_decode(file_get_contents($imagesFile), true) ?: [];
-        $totalBytes = 0;
-
-        foreach ($images as $img) {
-            if (($img['ip'] ?? '') === $ip && ($img['created_at'] ?? 0) >= $sinceTimestamp) {
-                $totalBytes += $img['size'] ?? 0;
-            }
-        }
-
-        return $totalBytes;
     }
 
     /**
@@ -464,19 +468,13 @@ class AbuseGuard
         $report['cleaned_expired'] = $this->cleanExpiredBlocks();
 
 
-        $imagesFile = __DIR__ . '/../data/images.json';
-        if (!file_exists($imagesFile)) {
-            return $report;
-        }
-
-        $images = json_decode(file_get_contents($imagesFile), true) ?: [];
         $since24h = strtotime('-24 hours');
         $since1h = strtotime('-1 hour');
 
 
         $ipStats = [];
         $hourlyCounts = [];
-        foreach ($images as $img) {
+        foreach ($this->imageRepo->iterateAll() as $id => $img) {
             $ip = $img['ip'] ?? 'unknown';
             $createdAt = $img['created_at'] ?? 0;
 

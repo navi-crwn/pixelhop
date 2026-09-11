@@ -7,6 +7,7 @@
 require_once __DIR__ . '/../includes/bootstrap.php';
 require_once __DIR__ . '/../auth/middleware.php';
 require_once __DIR__ . '/../includes/Database.php';
+require_once __DIR__ . '/../includes/AdminGalleryService.php';
 
 if (!isAuthenticated() || !isAdmin()) {
     header('Location: /login.php?error=access_denied');
@@ -14,7 +15,6 @@ if (!isAuthenticated() || !isAdmin()) {
 }
 
 $db = Database::getInstance();
-$currentUser = getCurrentUser();
 $csrfToken = generateCsrfToken();
 $currentPage = 'gallery';
 
@@ -151,96 +151,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
     exit;
 }
 
-// Pagination
-$page = max(1, (int)($_GET['page'] ?? 1));
-$perPage = 30;
-$offset = ($page - 1) * $perPage;
+// Aggregate list & stats via service (DB tabel images = sumber kebenaran)
+$galleryService = new AdminGalleryService();
+$galleryData = $galleryService->getData([
+    'page' => (int) ($_GET['page'] ?? 1),
+    'per_page' => 30,
+    'search' => (string) ($_GET['search'] ?? ''),
+    'user' => (string) ($_GET['user'] ?? ''),
+    'date' => (string) ($_GET['date'] ?? ''),
+    'sort' => (string) ($_GET['sort'] ?? 'newest'),
+]);
 
-// Filters
-$search = $_GET['search'] ?? '';
-$filterUser = $_GET['user'] ?? '';
-$filterDate = $_GET['date'] ?? '';
-$sort = $_GET['sort'] ?? 'newest';
-
-// Load images from repository
-$allImages = $repo->readAll();
-
-// Get all users for lookup
-$usersStmt = $db->query("SELECT id, email, account_type FROM users");
-$usersMap = [];
-while ($row = $usersStmt->fetch(PDO::FETCH_ASSOC)) {
-    $usersMap[$row['id']] = $row;
-}
-
-// Process and filter images
-$processedImages = [];
-$userStats = ['guest' => 0];
-
-foreach ($allImages as $id => $img) {
-    $img['id'] = $id;
-    
-    $userId = $img['user_id'] ?? null;
-    if ($userId && isset($usersMap[$userId])) {
-        $img['user_email'] = $usersMap[$userId]['email'];
-        $img['is_guest'] = false;
-        $userStats[$userId] = ($userStats[$userId] ?? 0) + 1;
-    } else {
-        $img['user_email'] = 'Guest';
-        $img['is_guest'] = true;
-        $userStats['guest']++;
-    }
-    
-    // Apply filters
-    if ($search) {
-        $matchFilename = stripos($img['filename'] ?? '', $search) !== false;
-        $matchId = stripos($id, $search) !== false;
-        $matchEmail = stripos($img['user_email'] ?? '', $search) !== false;
-        if (!$matchFilename && !$matchId && !$matchEmail) continue;
-    }
-    
-    if ($filterUser) {
-        if ($filterUser === 'guest' && !$img['is_guest']) continue;
-        if ($filterUser !== 'guest' && ($img['user_id'] ?? '') != $filterUser) continue;
-    }
-    
-    if ($filterDate) {
-        $imgDate = date('Y-m-d', $img['created_at'] ?? 0);
-        if ($imgDate !== $filterDate) continue;
-    }
-    
-    $processedImages[] = $img;
-}
-
-// Sort images
-usort($processedImages, function($a, $b) use ($sort) {
-    switch ($sort) {
-        case 'oldest': return ($a['created_at'] ?? 0) - ($b['created_at'] ?? 0);
-        case 'largest': return ($b['size'] ?? 0) - ($a['size'] ?? 0);
-        case 'smallest': return ($a['size'] ?? 0) - ($b['size'] ?? 0);
-        case 'views': return ($b['view_count'] ?? 0) - ($a['view_count'] ?? 0);
-        case 'name': return strcasecmp($a['filename'] ?? '', $b['filename'] ?? '');
-        default: return ($b['created_at'] ?? 0) - ($a['created_at'] ?? 0);
-    }
-});
-
-$totalFiltered = count($processedImages);
-$totalPages = ceil($totalFiltered / $perPage);
-$images = array_slice($processedImages, $offset, $perPage);
-
-// Calculate stats
-$totalSize = array_sum(array_column($allImages, 'size'));
-$totalViews = array_sum(array_column($allImages, 'view_count'));
-$guestCount = count(array_filter($allImages, fn($i) => empty($i['user_id'])));
-$memberCount = count($allImages) - $guestCount;
-
-// Get unique dates for filter
-$uniqueDates = [];
-foreach ($allImages as $img) {
-    $date = date('Y-m-d', $img['created_at'] ?? 0);
-    $uniqueDates[$date] = ($uniqueDates[$date] ?? 0) + 1;
-}
-krsort($uniqueDates);
-$uniqueDates = array_slice($uniqueDates, 0, 30, true);
+$page = $galleryData['page'];
+$perPage = $galleryData['per_page'];
+$offset = $galleryData['offset'];
+$search = $galleryData['search'];
+$filterUser = $galleryData['filter_user'];
+$filterDate = $galleryData['filter_date'];
+$sort = $galleryData['sort'];
+$images = $galleryData['images'];
+$allImages = $galleryData['all_count'];
+$usersMap = $galleryData['users_map'];
+$userStats = $galleryData['user_stats'];
+$totalFiltered = $galleryData['total_filtered'];
+$totalPages = $galleryData['total_pages'];
+$totalSize = $galleryData['total_size'];
+$totalViews = $galleryData['total_views'];
+$guestCount = $galleryData['guest_count'];
+$memberCount = $galleryData['member_count'];
+$uniqueDates = $galleryData['unique_dates'];
 
 function formatBytes($bytes) {
     if ($bytes >= 1073741824) return round($bytes / 1073741824, 2) . ' GB';
@@ -275,8 +214,6 @@ function adminProxyUrlForVariant(array $img, string $size): string {
 
     return '';
 }
-
-$currentPage = 'gallery';
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -582,7 +519,7 @@ $currentPage = 'gallery';
                 <div class="stats-row-compact mb-4">
                     <div class="stat-compact">
                         <i data-lucide="images" class="w-4 h-4 text-cyan"></i>
-                        <span class="stat-num"><?= number_format(count($allImages)) ?></span>
+                        <span class="stat-num"><?= number_format($allImages) ?></span>
                         <span class="stat-lbl">Images</span>
                     </div>
                     <div class="stat-compact">

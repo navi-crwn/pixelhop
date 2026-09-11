@@ -14,63 +14,27 @@ if (empty($resultId) && $errorCount === 0) {
     exit;
 }
 
-// Load config
+// Load config (dipakai template untuk site.url)
 $config = require __DIR__ . '/config/s3.php';
 
-// Load images data via ImageRepository (per-id lookup, bukan baca penuh).
-require_once __DIR__ . '/includes/ImageRepository.php';
-$repo = new ImageRepository();
-$images = [];
+// Data gambar disiapkan oleh ResultPresenter (lookup per-id via
+// ImageRepository, proxy_urls /i/<key>, dan agregasi total). Controller
+// hanya memanggil presenter lalu merender template di bawah.
+require_once __DIR__ . '/includes/ResultPresenter.php';
+$presenter = new ResultPresenter($config);
 
-if (!empty($resultId)) {
-    $imageIds = explode(',', $resultId);
+$imageIds = !empty($resultId) ? explode(',', $resultId) : [];
+$resultData = $presenter->load($imageIds);
 
-    foreach ($imageIds as $id) {
-        $id = trim($id);
-        $image = $repo->find($id);
-        if ($image !== null) {
-            $images[$id] = $image;
-        }
-    }
-}
+$images = $resultData['images'];
+$totalImages = $resultData['total_images'];
+$totalSize = $resultData['total_size'];
+$earliestExpiry = $resultData['earliest_expiry'];
 
 // If no images found AND no errors to show, redirect
 if (empty($images) && $errorCount === 0) {
     header('Location: /?error=no_results');
     exit;
-}
-
-// Helper function to build proxy URL
-function resultGetProxyUrl($s3Key, $siteUrl) {
-    return $siteUrl . '/i/' . $s3Key;
-}
-
-// Build proxy URLs for all images
-foreach ($images as $id => &$img) {
-    $s3Keys = $img['s3_keys'] ?? [];
-    $proxyUrls = [];
-    foreach ($s3Keys as $sizeName => $key) {
-        $proxyUrls[$sizeName] = resultGetProxyUrl($key, $config['site']['url']);
-    }
-    // Fallback terakhir: hanya record lama tanpa s3_keys. URL mentah S3 di
-    // $img['urls'] akan 403 setelah bucket diprivatkan; ini murni jaring
-    // pengaman render untuk data warisan. Upload baru selalu punya s3_keys.
-    $img['proxy_urls'] = !empty($proxyUrls) ? $proxyUrls : ($img['urls'] ?? []);
-}
-unset($img); // Break reference
-
-// Calculate totals
-$totalSize = 0;
-$totalImages = count($images);
-$earliestExpiry = null;
-
-foreach ($images as $img) {
-    $totalSize += $img['size'] ?? 0;
-    if (isset($img['delete_at']) && $img['delete_at']) {
-        if ($earliestExpiry === null || $img['delete_at'] < $earliestExpiry) {
-            $earliestExpiry = $img['delete_at'];
-        }
-    }
 }
 
 // Format file size

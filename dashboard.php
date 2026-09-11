@@ -7,15 +7,13 @@
 require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/auth/middleware.php';
 require_once __DIR__ . '/includes/Database.php';
-require_once __DIR__ . '/core/Gatekeeper.php';
+require_once __DIR__ . '/includes/DashboardService.php';
 
 if (!isAuthenticated()) {
     header('Location: /login.php');
     exit;
 }
 
-$db = Database::getInstance();
-$gatekeeper = new Gatekeeper();
 $currentUser = getCurrentUser();
 $isAdmin = isAdmin();
 
@@ -29,41 +27,19 @@ if ($adminWarning) {
     );
 }
 
-// Get user's quota and usage - Admin has unlimited access
-$storageUsed = $currentUser['storage_used'] ?? 0;
-if ($isAdmin) {
-    $storageLimit = PHP_INT_MAX;
-    $storagePercent = 0;
-    $ocrLimit = PHP_INT_MAX;
-    $rembgLimit = PHP_INT_MAX;
-} else {
-    $storageLimit = ($currentUser['account_type'] ?? 'free') === 'premium' ? 5 * 1024 * 1024 * 1024 : 500 * 1024 * 1024;
-    $storagePercent = $storageLimit > 0 ? round(($storageUsed / $storageLimit) * 100, 1) : 0;
-    $ocrLimit = $gatekeeper->getSetting(($currentUser['account_type'] ?? 'free') === 'premium' ? 'daily_ocr_limit_premium' : 'daily_ocr_limit_free');
-    $rembgLimit = $gatekeeper->getSetting(($currentUser['account_type'] ?? 'free') === 'premium' ? 'daily_removebg_limit_premium' : 'daily_removebg_limit_free');
-}
+$dashboardService = new DashboardService();
+$dashboardData = $dashboardService->getData((int) $currentUser['id']);
 
-$ocrUsed = $currentUser['daily_ocr_count'] ?? 0;
-$rembgUsed = $currentUser['daily_removebg_count'] ?? 0;
-
-// Get user's recent uploads - filter by user_id
-require_once __DIR__ . '/includes/ImageRepository.php';
-$repo = new ImageRepository();
-
-$allImages = $repo->readAll();
-
-$myImages = array_filter($allImages, function($img) use ($currentUser) {
-    return isset($img['user_id']) && $img['user_id'] == $currentUser['id'];
-});
-
-usort($myImages, fn($a, $b) => ($b['created_at'] ?? 0) - ($a['created_at'] ?? 0));
-$userImages = array_slice($myImages, 0, 6);
-
-// Get recent tool usage
-$userId = $currentUser['id'];
-$recentLogsStmt = $db->prepare("SELECT * FROM usage_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 5");
-$recentLogsStmt->execute([$userId]);
-$recentLogs = $recentLogsStmt->fetchAll(PDO::FETCH_ASSOC);
+$storageUsed = $dashboardData['storage_used'];
+$storageLimit = $dashboardData['storage_limit'];
+$storagePercent = $dashboardData['storage_percent'];
+$ocrLimit = $dashboardData['ocr_limit'];
+$rembgLimit = $dashboardData['rembg_limit'];
+$ocrUsed = $dashboardData['ocr_used'];
+$rembgUsed = $dashboardData['rembg_used'];
+$uploadCount = $dashboardData['upload_count'];
+$userImages = $dashboardData['recent_uploads'];
+$recentLogs = $dashboardData['recent_activity'];
 
 function formatBytes($bytes) {
     if ($bytes >= 1073741824) return round($bytes / 1073741824, 2) . ' GB';

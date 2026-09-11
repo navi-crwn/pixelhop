@@ -16,19 +16,19 @@ if (!isAuthenticated()) {
 }
 
 $currentUser = getCurrentUser();
-$type = $_GET['type'] ?? 'upload';
-$count = (int)($_GET['count'] ?? 0);
 
-// Whitelist the requested tool. $tool is reflected into the <title>, the page
-// heading and the JS download filename, so anything outside the known tool set
-// is discarded instead of being echoed back (reflected XSS).
-$tool = $_GET['tool'] ?? '';
-$allowedTools = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg'];
-if ($tool !== '' && !in_array($tool, $allowedTools, true)) {
-    $tool = '';
-}
+// State render (type/count/tool + whitelist tool) disiapkan oleh
+// MemberResultPresenter. Controller hanya memanggil presenter lalu merender
+// template di bawah; template tidak diubah.
+require_once __DIR__ . '/../includes/MemberResultPresenter.php';
+$presenter = new MemberResultPresenter();
+$resultState = $presenter->load($_GET);
 
-$isToolResult = ($type === 'tool' || !empty($tool));
+$type = $resultState['type'];
+$count = $resultState['count'];
+$tool = $resultState['tool'];
+$isToolResult = $resultState['is_tool_result'];
+$allowedTools = $resultState['allowed_tools'];
 
 $csrfToken = generateCsrfToken();
 ?>

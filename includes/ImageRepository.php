@@ -1044,17 +1044,32 @@ final class ImageRepository
             $columns[] = 'id';
         }
 
+        $driver = (string) $this->db()->getAttribute(PDO::ATTR_DRIVER_NAME);
+
         $assignments = [];
         foreach ($columns as $column) {
             if ($column === 'id') {
                 continue;
             }
-            $assignments[] = $column . ' = :' . $column;
+
+            // UPDATE clause TIDAK boleh memakai named placeholder yang sama
+            // dengan VALUES clause. MySQL native prepares (ATTR_EMULATE_PREPARES
+            // false) menolak placeholder ganda (HY093). MySQL memakai VALUES(),
+            // SQLite memakai excluded.* (pola ON CONFLICT).
+            if ($driver === 'mysql') {
+                $assignments[] = $column . ' = VALUES(' . $column . ')';
+            } else {
+                $assignments[] = $column . ' = excluded.' . $column;
+            }
         }
 
         if ($assignments === []) {
             // Upsert dengan data minim (hanya id): no-op assignment yang valid.
-            $assignments[] = 'id = :id';
+            if ($driver === 'mysql') {
+                $assignments[] = 'id = VALUES(id)';
+            } else {
+                $assignments[] = 'id = excluded.id';
+            }
         }
 
         $values = [];
@@ -1066,8 +1081,6 @@ final class ImageRepository
         foreach ($columns as $column) {
             $params[':' . $column] = $this->encodeDbValue($column, $column === 'id' ? $id : ($data[$column] ?? null));
         }
-
-        $driver = (string) $this->db()->getAttribute(PDO::ATTR_DRIVER_NAME);
 
         if ($driver === 'mysql') {
             $sql = 'INSERT INTO images (' . implode(', ', $columns) . ') VALUES (' . implode(', ', $values) . ')'

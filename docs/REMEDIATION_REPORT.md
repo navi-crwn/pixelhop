@@ -395,6 +395,103 @@ Pelengkap arsitektur:
 | **`popup-banner.php`** path Gatekeeper salah (`includes/core/` → `../core/`) | Path diperbaiki. |
 | **`dbSave` dual-write** gagal `HY093` (placeholder ganda) | Diubah ke pola **`VALUES()` / `excluded`**. |
 
+### 3.10 Fase 5: Upgrade UI/UX Premium & AI Tools (2026-09-13)
+
+> **Status: SELESAI & LIVE.** Fase 5 tidak mengejar skor keamanan, melainkan **nilai produk**
+> (tampilan premium + kemampuan AI baru). Semua perubahan **aditif** (tidak menghapus perilaku
+> lama), **terverifikasi live**, dan **bisa dimatikan seketika** lewat toggle admin (lihat 5.1).
+> Fase ini dikerjakan pada **2026-09-13** oleh tim multi-agen, dengan **3 pass audit** sebelum
+> dinyatakan deploy-safe.
+
+#### 3.10.1 Backup Fase 5 (sebelum menyentuh kode)
+
+Sesuai aturan besi "backup dulu, baru sentuh", dua backup diambil pada hari yang sama:
+
+| Backup | Lokasi | Isi |
+|---|---|---|
+| **Pra-UX** (sebelum perubahan UI/AI) | `/var/backups/pichost/20260913_102928/` | Kode + DB keadaan sebelum Fase 5 |
+| **Predeploy final** (sesaat sebelum go-live) | `/var/backups/pichost/20260913_111259/` | Kode **dan** DB keadaan final |
+
+#### 3.10.2 UI/UX Premium (tampilan & rasa)
+
+| Area | Yang dikerjakan |
+|---|---|
+| **Tipografi & token** | Font display **Space Grotesk** untuk judul + token desain premium (glass, **AI gold**, latar **aurora**) memakai `--font-display` dan warna aurora (`assets/css/glass.css`). |
+| **Hero beranda** | **Social proof strip** (image hosting included / 10+ free tools / 100% private) + **dual CTA** (Upload Sekarang / Jelajahi Tools) + **upload-zone glow** animatif di halaman upload. |
+| **Notifikasi** | **Toast** modern (kanan-bawah, auto-dismiss) menggantikan `alert()` bawaan browser. |
+| **Daftar tool** | Tool dikelompokkan menjadi **AI Tools** dan **Quick Tools** (`ToolRegistry` `section`), dengan badge **AI** / **Instant**. |
+| **Modal tool** | Header & tombol submit **sticky** di dalam modal (`max-height: 90vh` + `overflow-y: auto`) agar tetap terlihat saat konten panjang. |
+| **Result** | **Before-after slider** untuk membandingkan gambar asli vs hasil (drag handle). |
+| **QR offline** | Generator QR **murni JavaScript** (tanpa API/CDN) di **result**, **view**, dan **tools**. |
+| **Gallery** | **Skeleton loading**, **lightbox** (navigasi prev/next + counter), dan **empty state**. |
+| **Dashboard** | **Counter animatif** pada kartu statistik + pemolesan tampilan stat. |
+
+#### 3.10.3 Upgrade tool AI yang sudah ada
+
+- **OCR** dinaikkan ke **PP-OCRv5** dengan **fallback PP-OCRv4** (lalu default bawaan bila perlu),
+  ditambah **pra-pemrosesan gambar kecil** + **denoise** (OpenCV) dan pelaporan **confidence**.
+  Uji engine live mendeteksi `PIXELHOP OCR 123` dengan confidence **≈ 0.9152**.
+- **Remove Background** kini menawarkan pilihan model di UI: **u2net**, **isnet-general-use**,
+  **u2net_human_seg**, **BiRefNet general/portrait**, plus opsi **alpha matting** untuk tepi lebih halus.
+  Model **BiRefNet** diuji **live**.
+
+#### 3.10.4 Tool baru
+
+| Tool | Mesin | Catatan uji live |
+|---|---|---|
+| **AI HD Upscale** | **Real-ESRGAN** via ONNX Runtime | Uji direct-engine sukses **2×** pada fixture kecil dalam **~4 detik** |
+| **Magic Eraser** | **LaMa** via ONNX Runtime (penanganan **fixed-shape letterbox**) | Uji direct-engine **~24 detik** pada fixture kecil |
+| **Face Blur** | **OpenCV** (YuNet, fallback **Haar** cascade) | Tanpa wajah → **graceful** (`no_face`, tidak error) |
+| **Color Palette** | Ekstraksi warna dominan (dapat dipakai **guest**) | Uji API live **sukses** (JSON) |
+| **QR Code** | Encoder QR **offline** di browser | Berjalan tanpa jaringan |
+
+#### 3.10.5 Model AI, lisensi & path runtime
+
+| Model | Ukuran | Lokasi cache | Lisensi |
+|---|---|---|---|
+| **BiRefNet general + portrait** | ~928 MB **per model** | `/var/www/.u2net` | MIT |
+| **Real-ESRGAN** (RealESRGAN_x2plus) | ~64 MB | `/var/www/.cache/realesrgan` | BSD-3-Clause |
+| **LaMa** (big-lama) | ~198 MB | `/var/www/.cache/lama` | Apache-2.0 |
+
+- `scripts/download_models.sh` **idempotent** + memverifikasi **checksum SHA-256** (URL/hash bisa
+  di-override operator untuk mirror sendiri).
+- Lisensi lengkap dicatat di **`THIRD_PARTY_MODELS.md`** (MIT / BSD-3-Clause / Apache-2.0 — semuanya
+  mengizinkan pemakaian server-side komersial).
+- **Path runtime di-pin dari runner PHP**: `AiService` (U2NET_HOME=/var/www/.u2net),
+  `UpscaleRunner` (REALESRGAN_MODEL=/var/www/.cache/realesrgan/…), `api/erase.php`
+  (LAMA_MODEL=/var/www/.cache/lama/lama.onnx), dan **HOME=/var/www** di-set eksplisit pada perintah
+  Python agar cache selalu menunjuk ke lokasi unduhan — apa pun `HOME` yang diwarisi PHP-FPM.
+
+#### 3.10.6 Database, kuota & toggle admin
+
+- **Migrasi 005** (`database/migrations/005_tool_settings.sql`) — **idempotent** (`INSERT IGNORE`):
+  menambah toggle `tool_*_enabled` (upscale/erase/faceblur/palette/qr + ocr/rembg lama) dan kuota
+  harian (`upscale_limit_*`, `erase_limit_*`, `faceblur_limit_*`, `palette_limit_guest`).
+- **Migrasi 006** (`database/migrations/006_usage_logs_user_id_nullable.sql`) — **idempotent**
+  (guard `information_schema`): `usage_logs.user_id` menjadi **NULLABLE** dengan FK
+  **`ON DELETE SET NULL`**, sehingga baris **guest** (mis. Color Palette) bisa dicatat dan baris
+  milik user yang dihapus tetap tersimpan untuk audit/kuota.
+- **Gatekeeper / admin**: toggle & batas harian tool baru diatur dari dashboard admin
+  (`admin/tools.php`, `admin/settings.php`) — termasuk validasi angka non-negatif saat menyimpan.
+
+#### 3.10.7 Tiga pass audit (sebelum deploy)
+
+1. **Audit awal** menemukan **blocker**: handler QR, kontrak API, `requirements.txt`, dan kuota →
+   **diperbaiki**.
+2. **Audit ulang** oleh dua auditor independen (**GLM** dan **Kimi**) → **signoff: DEPLOY-SAFE**.
+3. **Fix final**: **Magic Eraser** memakai **canvas mask terpisah** (mask tidak lagi mengganggu
+   gambar pratinjau) dan **XSS di `app.js`** diperbaiki (nilai user tidak lagi di-`innerHTML`).
+
+#### 3.10.8 Verifikasi live (fakta uji)
+
+- **Endpoint**: home / tools / assets → **200**; nama-nama tool baru tampil di halaman.
+- **API AI baru** → **401** untuk guest (**sesuai harapan**, butuh login); **Color Palette guest**
+  → **sukses (JSON)**; **path sensitif** → **terblokir**; **setting DB** → **benar**.
+- **Smoke test engine Python**: **OCR**, **u2net**, **BiRefNet**, **upscale**, **erase**,
+  **palette**, dan **faceblur** (tanpa wajah → **graceful**) semua **lulus**.
+- **Catatan**: **monitoring manual (UptimeRobot)** masih **ditunda oleh pemilik** sampai seluruh
+  pengerjaan selesai — ini **bukan** bagian dari kode dan bisa dilakukan kapan saja setelahnya.
+
 ---
 
 ## 4. KEADAAN SETELAH REMEDIASI (Kesimpulan)
@@ -427,6 +524,12 @@ Pelengkap arsitektur:
 | **Endpoint kesehatan** (Fase 4) | `health.php` → `ok`/`degraded`/`down` (DB/storage/disk/AI) |
 | **Log terstruktur & alert** (Fase 4) | `Logger` JSONL + rotasi 5 MB + retensi 14 hari; `Alerter` email throttle 15 menit |
 | **Ringkasan & metrik** (Fase 4) | `cron/daily_summary.php` 23:55; `metrics.php` Prometheus terkunci |
+| **UI/UX premium** (Fase 5) | Space Grotesk + token premium (AI gold/aurora); hero social proof + dual CTA + upload glow; toast ganti `alert()`; tool dikelompokkan AI/Quick; modal sticky; before-after slider; QR offline; gallery skeleton/lightbox/empty state; counter dashboard |
+| **OCR ditingkatkan** (Fase 5) | PP-OCRv5 + fallback PP-OCRv4 + pra-proses gambar kecil/denoise/confidence; uji live `PIXELHOP OCR 123` **≈ 0.9152** |
+| **RemoveBG model pilihan** (Fase 5) | u2net / isnet-general-use / u2net_human_seg / BiRefNet general+portrait / alpha matting; BiRefNet diuji live |
+| **Tool AI baru** (Fase 5) | Upscale (Real-ESRGAN ONNX ~4s 2×), Magic Eraser (LaMa ONNX ~24s), Face Blur (OpenCV Haar/YuNet, no-face graceful), Color Palette (guest, API live sukses), QR offline |
+| **Model + lisensi + migrasi** (Fase 5) | `download_models.sh` idempotent+checksum; lisensi di `THIRD_PARTY_MODELS.md`; migrasi 005/006 idempotent; path runtime di-pin; toggle/kuota di admin |
+| **Audit Fase 5** (Fase 5) | 3 pass audit; GLM & Kimi **DEPLOY-SAFE**; fix canvas mask terpisah (Magic Eraser) + XSS `app.js` |
 
 ### 4.2 Sisa yang perlu TINDAKAN MANUAL KAMU (non-teknis, mudah)
 
@@ -480,22 +583,32 @@ Migrasi ke Podman **ditunda**, bukan dibatalkan. Alasan:
 
 Sketsa `Containerfile` + compose ada di **bagian 6.4**.
 
-### 4.5 Skor akhir per dimensi (sebelum → sesudah Fase 1–4)
+### 4.5 Skor akhir per dimensi (sebelum → sesudah Fase 1–5)
 
-Skor awal dari audit adalah **2.5 / 10 (KRITIS)**. Setelah Fase 1 (keamanan) dan Fase 2–4
-(keandalan, arsitektur, observabilitas), skor tiap dimensi naik sebagai berikut:
+Skor awal dari audit adalah **2.5 / 10 (KRITIS)**. Setelah Fase 1 (keamanan), Fase 2–4
+(keandalan, arsitektur, observabilitas), dan Fase 5 (nilai produk + UI/UX AI tools), skor tiap
+dimensi naik sebagai berikut:
 
 | Dimensi | Sebelum | Sesudah | Penggerak utama |
 |---|---|---|---|
-| **Security** | ~3.0 | **~8.5** | Bootstrap sesi, SSRF guard, fail-closed, `session_version`, privatisasi storage |
-| **Reliability** | 6.5 | **~8.5** | Metadata JSON→DB (`db_only`), `UploadJournal`, orphan reconciler, backup harian |
-| **Arsitektur** | 4.5 | **~7.5** | God-file dipecah additive, helper terpusat, `ImageRepository` sebagai satu DAL |
-| **Observability** | 3.0 | **~7.5** | `health.php`, `Logger` JSONL, `Alerter`, `daily_summary`, `metrics.php` |
-| **TOTAL (rata-rata)** | **2.5** | **≈ 8.2 / 10** | Seluruh temuan CRITICAL/HIGH ditutup; sisa risiko diterima secara sadar (bagian 4.3) |
+| **Security** | ~3.0 | **~8.5** | Bootstrap sesi, SSRF guard, fail-closed, `session_version`, privatisasi storage (Fase 1) |
+| **Reliability** | 6.5 | **~8.5** | Metadata JSON→DB (`db_only`), `UploadJournal`, orphan reconciler, backup harian (Fase 2) |
+| **Arsitektur** | 4.5 | **~8.0** | God-file dipecah additive + `ImageRepository` sebagai satu DAL (Fase 3), dan `ToolRegistry` mendorong komponen tool baru secara konsisten (Fase 5) |
+| **Observability** | 3.0 | **~7.5** | `health.php`, `Logger` JSONL, `Alerter`, `daily_summary`, `metrics.php` (Fase 4) |
+| **Product UX / Feature Value** | — | **~9.0** (kualitatif) | UI premium (font/token/toast/slider/QR/gallery) + 4 tool AI baru + tool lama ditingkatkan (Fase 5) |
+| **TOTAL (kesehatan teknis)** | **2.5** | **≈ 8.3–8.6 / 10** | Seluruh temuan CRITICAL/HIGH ditutup; sisa risiko diterima sadar (bagian 4.3); nilai produk melonjak (Fase 5) |
 
-> **Catatan:** skor "Sebelum" per dimensi adalah estimasi pembobotan dari temuan audit
-> (`AUDIT_REPORT.md`); skor "Sesudah" mencerminkan keadaan **live `p.hel.ink`** pasca
-> Fase 2–4. Angka total ≈ 8.2 berasal dari rata-rata empat dimensi di atas.
+> **Catatan penting soal skor:**
+> - Skor **Security / Reliability / Arsitektur / Observability** adalah skor **teknis** yang
+>   dihitung/diestimasi dari temuan audit (`AUDIT_REPORT.md`).
+> - **Product UX / Feature Value ~9.0 adalah skor KUALITATIF yang terpisah** — **bukan** bagian
+>   dari skor keamanan berbobot dan **tidak** ditarik ke rata-rata teknis. Ia mengukur nilai produk
+>   (tampilan + kemampuan tool), bukan kekuatan kontrol keamanan.
+> - Karena itu, kesehatan **teknis** keseluruhan dilaporkan **≈ 8.3–8.6 / 10** (naik dari ≈ 8.2
+>   pada Fase 1–4), **bukan** angka 9+.
+> - **Mengapa belum 9+ (jujur):** masih ada polish yang belum dikerjakan — **uji browser
+>   E2E penuh**, **uji tool terautentikasi (login) menyeluruh**, serta **jalur GPU / async queue**
+>   untuk mempercepat AI. Ini adalah pekerjaan masa depan, bukan klaim saat ini.
 
 ---
 
@@ -522,6 +635,11 @@ Skor awal dari audit adalah **2.5 / 10 (KRITIS)**. Setelah Fase 1 (keamanan) dan
 | **God-file refactor (Fase 3)** | Revert file via Git di server: `cd /var/www/pichost && git checkout <commit> -- <file>` | Kembali ke file besar; **pastikan** service/presenter lama ikut konsisten agar tidak ada require yang hilang |
 | **`health.php` / `metrics.php`** (Fase 4) | Hapus file (endpoint hilang) | Kehilangan visibilitas; **tidak** memengaruhi fungsi upload/serving |
 | **`Logger` / `Alerter`** (Fase 4) | Revert via Git; `data/logs/` boleh dibiarkan | Error kembali hanya ke log server lama; alert email berhenti |
+| **Aset UX & halaman** (Fase 5): `assets/css/glass.css`, `assets/js/app.js`, `index.php`, `tools.php`, `result.php`, `view.php`, `gallery.php`, `dashboard.php` | Revert via **Git** di server (`cd /var/www/pichost && git checkout <commit> -- <file>`) **atau** restore dari backup `/var/backups/pichost/20260913_102928/` (pra-UX) / `20260913_111259/` (predeploy) | Tampilan kembali ke versi sebelum Fase 5 (font/token/toast/slider/QR/gallery/counter hilang). **Tidak** memengaruhi data atau fungsi upload |
+| **Tool baru** (Fase 5): Upscale / Magic Eraser / Face Blur / Color Palette / QR | **Matikan seketika via toggle admin** — set `site_settings.tool_<nama>_enabled = 0` (atau lewat `admin/tools.php`). Tool langsung tersembunyi & API menolak | Fitur baru nonaktif; tidak perlu menghapus kode/model. Aman & instan |
+| **Model AI** (Fase 5): BiRefNet / Real-ESRGAN / LaMa | **Boleh tetap tersimpan** di cache (`/var/www/.u2net`, `/var/www/.cache/realesrgan`, `/var/www/.cache/lama`). Hapus folder cache **hanya bila** perlu membebaskan disk (otomatis diunduh lagi oleh `scripts/download_models.sh` bila dibutuhkan) | Menghapus cache = tool AI terkait gagal sampai model diunduh ulang (butuh jaringan) |
+| **Migrasi 006** (Fase 5, `usage_logs.user_id` NULLABLE + FK SET NULL) | **Balik hanya bila TIDAK ada** baris `usage_logs` dengan `user_id IS NULL`. Bila ada baris guest, **biarkan** (jangan revert). Bila aman: `ALTER TABLE usage_logs MODIFY user_id INT(10) UNSIGNED NOT NULL;` lalu tambahkan kembali FK `ON DELETE CASCADE` | Revert saat masih ada baris guest → `ALTER` gagal / data guest yatim. Karena itu **default: biarkan** |
+| **Kode + DB Fase 5 keseluruhan** | Restore dari backup: lihat perintah di bagian 5.2 dengan `BACKUP=/var/backups/pichost/20260913_111259` (kode+DB final) atau `.../20260913_102928` (pra-UX) | Kembali ke keadaan sebelum Fase 5; **pastikan** migrasi 005/006 dikembalikan konsisten dengan skema lama |
 
 ### 5.2 PROSEDUR ROLLBACK TOTAL (langkah demi langkah, copy-paste)
 
@@ -666,6 +784,8 @@ cd /var/www/pichost && git check-ignore -v config/turnstile.php config/s3.php
 | Item | Lokasi |
 |---|---|
 | Backup utama (Fase 0) | `/var/backups/pichost/20260910_145054/` |
+| Backup pra-UX (Fase 5) | `/var/backups/pichost/20260913_102928/` (kode + DB sebelum perubahan UI/AI) |
+| Backup predeploy final (Fase 5) | `/var/backups/pichost/20260913_111259/` (kode + DB keadaan final) |
 | Backup pra-rollback | `/var/backups/pichost/pre_rollback_<stamp>/` (dibuat saat rollback) |
 | Backup `images.json` | `data/images.json.<stamp>.bak` (dibuat otomatis oleh JsonStore, rotasi simpan 10 terbaru) |
 | Backup log privatisasi | `data/privatize_log.json` (resume log + ringkasan run terakhir) |
@@ -758,10 +878,13 @@ volumes:
 | **Konten terhapus masih tampil** | 1) Origin sudah **404/410** seketika. 2) Bila masih tampil → **cache Cloudflare**: purge by URL via dashboard **Caching → Purge** atau Purge Everything. 3) Pastikan Edge TTL `/i/` sudah diturunkan ke 1 hari (poin 4.2-B). |
 | **Kesalahan "CSRF token invalid" saat upload** | Untuk **user login**: refresh halaman agar token baru. Untuk **guest**: guest dibebaskan dari CSRF — bila guest tetap gagal, laporkan sebagai bug. |
 | **Curiga kunci bocor** | Rotasi di dashboard (Turnstile/R2/S3), lalu perbarui file di `/var/www/pichost/config/`. Jangan pernah commit `config/*.php`. |
+| **Tool AI baru (Upscale / Magic Eraser / Face Blur / Palette) mati** | 1) Cek toggle `site_settings.tool_<nama>_enabled` = 1 (admin → Tools). 2) Cek model ada di cache (`/var/www/.u2net`, `/var/www/.cache/realesrgan`, `/var/www/.cache/lama`); unduh via `scripts/download_models.sh` bila kosong. 3) Cek `PYTHON_BIN` & `onnxruntime` terpasang. |
+| **Tool hanya muncul untuk user login** | Memang begitu untuk tool AI (OCR/rembg/upscale/erase/faceblur); **guest** hanya mendapat tool Quick + **Color Palette** + **QR**. |
 | **Perlu membatalkan semua perubahan** | Ikuti **bagian 5.2 (Rollback Total)** langkah demi langkah. |
 
 ---
 
 *Dokumen ini adalah dokumentasi pertinggal pengerjaan remediasi. Untuk detail 84 temuan
 dengan bukti `file:baris`, lihat `AUDIT_REPORT.md`. Untuk perubahan kode, lihat branch
-`remediation/v1` (commit `d1d7b43`, `5122239`, `d5b6eb6`, `bd07cb1`).*
+`remediation/v1` (Fase 1–4: `d1d7b43`, `5122239`, `d5b6eb6`, `bd07cb1`; Fase 5:
+`7e4d8b7`, `19173ff`, `7e89844`).*

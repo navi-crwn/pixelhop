@@ -95,10 +95,11 @@ $isAdmin = $isLoggedIn && isAdmin();
         }
     </script>
 
-    <!-- Google Fonts - Inter -->
+    <!-- Google Fonts - Inter & Space Grotesk -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
@@ -108,6 +109,65 @@ $isAdmin = $isLoggedIn && isAdmin();
 
     <!-- Custom Styles -->
     <link rel="stylesheet" href="/assets/css/glass.css?v=1.1.0">
+
+    <!-- Hero upload zone idle glow -->
+    <style>
+        @keyframes upload-zone-glow {
+            0%, 100% {
+                box-shadow: 0 0 20px rgba(34, 211, 238, 0.15), 0 0 40px rgba(168, 85, 247, 0.1);
+            }
+            50% {
+                box-shadow: 0 0 30px rgba(34, 211, 238, 0.3), 0 0 60px rgba(168, 85, 247, 0.2);
+            }
+        }
+
+        @keyframes icon-ring-pulse {
+            0% {
+                transform: scale(1);
+                opacity: 0.4;
+            }
+            50% {
+                transform: scale(1.15);
+                opacity: 0.15;
+            }
+            100% {
+                transform: scale(1);
+                opacity: 0.4;
+            }
+        }
+
+        .upload-zone {
+            animation: upload-zone-glow 4s ease-in-out infinite;
+        }
+
+        .upload-zone::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: var(--radius-xl);
+            padding: 3px;
+            background: linear-gradient(
+                135deg,
+                rgba(34, 211, 238, 0.6) 0%,
+                rgba(168, 85, 247, 0.45) 50%,
+                rgba(236, 72, 153, 0.55) 100%
+            );
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            pointer-events: none;
+        }
+
+        .upload-icon-ring::after {
+            content: '';
+            position: absolute;
+            inset: -10px;
+            border-radius: 50%;
+            border: 2px solid rgba(34, 211, 238, 0.35);
+            animation: icon-ring-pulse 2.8s ease-in-out infinite;
+        }
+    </style>
 </head>
 <body class="min-h-screen font-sans overflow-x-hidden transition-colors duration-500">
 
@@ -293,11 +353,11 @@ $isAdmin = $isLoggedIn && isAdmin();
             <!-- Hero Section -->
             <section class="text-center mb-12">
                 <h1 class="text-4xl md:text-6xl font-bold mb-4">
-                    <span class="hero-title-primary">
+                    <span class="hero-title-primary" style="font-family: var(--font-display);">
                         Your Pixel is
                     </span>
                     <br>
-                    <span class="bg-gradient-to-r from-neon-cyan via-neon-purple to-neon-pink bg-clip-text text-transparent">
+                    <span class="text-gradient-hero" style="font-family: var(--font-display); font-size: clamp(2.5rem, 7vw, 4.5rem); line-height: 1.1;">
                         A Hop Away
                     </span>
                 </h1>
@@ -310,6 +370,34 @@ $isAdmin = $isLoggedIn && isAdmin();
                 <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full" style="background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.3);">
                     <i data-lucide="shield-check" class="w-4 h-4 text-green-400"></i>
                     <span class="text-sm" style="color: var(--color-text-secondary);">Protected by <strong class="text-green-400">AI-Powered Security</strong></span>
+                </div>
+
+                <!-- Social Proof Strip -->
+                <div class="mt-8 flex flex-wrap items-center justify-center gap-6 md:gap-10">
+                    <div class="flex items-center gap-2 text-sm" style="color: var(--color-text-secondary);">
+                        <i data-lucide="images" class="w-4 h-4 text-neon-cyan"></i>
+                        <span>Image hosting included</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm" style="color: var(--color-text-secondary);">
+                        <i data-lucide="sparkles" class="w-4 h-4 text-neon-purple"></i>
+                        <span>10+ free tools</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm" style="color: var(--color-text-secondary);">
+                        <i data-lucide="lock" class="w-4 h-4 text-neon-pink"></i>
+                        <span>100% private on-server</span>
+                    </div>
+                </div>
+
+                <!-- Hero CTA -->
+                <div class="mt-8 flex flex-wrap items-center justify-center gap-4">
+                    <a href="#upload-zone" class="btn-primary group">
+                        <i data-lucide="upload" class="w-4 h-4"></i>
+                        Upload Sekarang
+                    </a>
+                    <a href="/tools.php" class="btn-secondary group">
+                        <i data-lucide="wrench" class="w-4 h-4"></i>
+                        Jelajahi Tools
+                    </a>
                 </div>
             </section>
 

@@ -33,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
         case 'toggle_tool':
             $tool = $_POST['tool'] ?? '';
             $enabled = (int) ($_POST['enabled'] ?? 1);
-            $allowed = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg'];
+            $allowed = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg', 'upscale', 'erase', 'faceblur', 'palette'];
             if (in_array($tool, $allowed)) {
                 $gatekeeper->updateSetting("tool_{$tool}_enabled", $enabled);
                 echo json_encode(['success' => true]);
@@ -50,7 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 
 // Get today's usage stats
 $toolStats = [];
-$tools = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg'];
+$tools = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg', 'upscale', 'erase', 'faceblur', 'palette'];
 $toolStatsStmt = $db->prepare("SELECT COUNT(*) FROM usage_logs WHERE tool_name = ? AND DATE(created_at) = CURDATE()");
 foreach ($tools as $tool) {
     $toolStatsStmt->execute([$tool]);
@@ -61,13 +61,22 @@ foreach ($tools as $tool) {
 $totalToday = array_sum($toolStats);
 
 $toolInfo = [
-    'compress' => ['name' => 'Compress', 'icon' => 'file-minus', 'color' => 'cyan', 'type' => 'PHP', 'enabled' => $gatekeeper->getSetting('tool_compress_enabled', 1)],
-    'resize' => ['name' => 'Resize', 'icon' => 'scaling', 'color' => 'purple', 'type' => 'PHP', 'enabled' => $gatekeeper->getSetting('tool_resize_enabled', 1)],
-    'crop' => ['name' => 'Crop', 'icon' => 'crop', 'color' => 'purple', 'type' => 'PHP', 'enabled' => $gatekeeper->getSetting('tool_crop_enabled', 1)],
-    'convert' => ['name' => 'Convert', 'icon' => 'repeat', 'color' => 'green', 'type' => 'PHP', 'enabled' => $gatekeeper->getSetting('tool_convert_enabled', 1)],
-    'ocr' => ['name' => 'OCR', 'icon' => 'scan-text', 'color' => 'yellow', 'type' => 'Python', 'enabled' => $gatekeeper->getSetting('tool_ocr_enabled', 1)],
-    'rembg' => ['name' => 'Remove BG', 'icon' => 'eraser', 'color' => 'red', 'type' => 'Python', 'enabled' => $gatekeeper->getSetting('tool_rembg_enabled', 1)],
+    'compress' => ['name' => 'Compress', 'icon' => 'file-minus', 'color' => 'cyan', 'type' => 'PHP', 'badge' => null, 'enabled' => $gatekeeper->getSetting('tool_compress_enabled', 1)],
+    'resize' => ['name' => 'Resize', 'icon' => 'scaling', 'color' => 'purple', 'type' => 'PHP', 'badge' => null, 'enabled' => $gatekeeper->getSetting('tool_resize_enabled', 1)],
+    'crop' => ['name' => 'Crop', 'icon' => 'crop', 'color' => 'purple', 'type' => 'PHP', 'badge' => null, 'enabled' => $gatekeeper->getSetting('tool_crop_enabled', 1)],
+    'convert' => ['name' => 'Convert', 'icon' => 'repeat', 'color' => 'green', 'type' => 'PHP', 'badge' => null, 'enabled' => $gatekeeper->getSetting('tool_convert_enabled', 1)],
+    'ocr' => ['name' => 'OCR', 'icon' => 'scan-text', 'color' => 'yellow', 'type' => 'Python', 'badge' => 'AI', 'enabled' => $gatekeeper->getSetting('tool_ocr_enabled', 1)],
+    'rembg' => ['name' => 'Remove BG', 'icon' => 'eraser', 'color' => 'red', 'type' => 'Python', 'badge' => 'AI', 'enabled' => $gatekeeper->getSetting('tool_rembg_enabled', 1)],
+    'upscale' => ['name' => 'AI HD Upscale', 'icon' => 'zoom-in', 'color' => 'cyan', 'type' => 'Python', 'badge' => 'AI', 'enabled' => $gatekeeper->getSetting('tool_upscale_enabled', 1)],
+    'erase' => ['name' => 'Magic Eraser', 'icon' => 'wand-2', 'color' => 'purple', 'type' => 'Python', 'badge' => 'AI', 'enabled' => $gatekeeper->getSetting('tool_erase_enabled', 1)],
+    'faceblur' => ['name' => 'Face Blur', 'icon' => 'scan-face', 'color' => 'red', 'type' => 'Python', 'badge' => 'AI', 'enabled' => $gatekeeper->getSetting('tool_faceblur_enabled', 1)],
+    'palette' => ['name' => 'Color Palette', 'icon' => 'palette', 'color' => 'green', 'type' => 'Instant', 'badge' => 'Instant', 'enabled' => $gatekeeper->getSetting('tool_palette_enabled', 1)],
 ];
+
+// Summary counts derived from $toolInfo so they stay in sync with the registry.
+$phpToolCount = count(array_filter($toolInfo, fn($t) => $t['type'] === 'PHP'));
+$pythonToolCount = count(array_filter($toolInfo, fn($t) => $t['type'] === 'Python'));
+$instantToolCount = count(array_filter($toolInfo, fn($t) => $t['type'] === 'Instant'));
 
 $csrfToken = generateCsrfToken();
 $currentPage = 'gallery';
@@ -80,6 +89,7 @@ $currentPage = 'gallery';
     <title>Tools Stats - Admin - PixelHop</title>
     <link rel="icon" type="image/svg+xml" href="/assets/img/logo.svg">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link rel="stylesheet" href="/admin/includes/admin-styles.css">
     <script src="/admin/includes/admin-scripts.js"></script>
@@ -91,7 +101,7 @@ $currentPage = 'gallery';
             
             <div class="admin-content">
                 <!-- Stats Summary -->
-                <div class="grid-3 mb-6">
+                <div class="grid-4 mb-6">
                     <div class="stat-card">
                         <div class="stat-label">
                             <i data-lucide="activity" class="w-4 h-4 text-cyan"></i>
@@ -104,14 +114,21 @@ $currentPage = 'gallery';
                             <i data-lucide="code" class="w-4 h-4 text-purple"></i>
                             PHP Tools
                         </div>
-                        <div class="stat-value">4</div>
+                        <div class="stat-value"><?= $phpToolCount ?></div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">
                             <i data-lucide="brain" class="w-4 h-4 text-yellow"></i>
                             Python/AI Tools
                         </div>
-                        <div class="stat-value">2</div>
+                        <div class="stat-value"><?= $pythonToolCount ?></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">
+                            <i data-lucide="zap" class="w-4 h-4 text-green"></i>
+                            Instant Tools
+                        </div>
+                        <div class="stat-value"><?= $instantToolCount ?></div>
                     </div>
                 </div>
 
@@ -138,7 +155,14 @@ $currentPage = 'gallery';
                             </div>
                             <div class="tool-name"><?= $tool['name'] ?></div>
                             <div class="tool-meta">
-                                <span class="badge badge-<?= $tool['type'] === 'Python' ? 'yellow' : 'cyan' ?>"><?= $tool['type'] ?></span>
+                                <?php
+                                    $typeBadgeColor = ['Python' => 'yellow', 'Instant' => 'green'][$tool['type']] ?? 'cyan';
+                                    $badgeColor = $tool['badge'] === 'AI' ? 'purple' : 'green';
+                                ?>
+                                <span class="badge badge-<?= $typeBadgeColor ?>"><?= $tool['type'] ?></span>
+                                <?php if (!empty($tool['badge'])): ?>
+                                <span class="badge badge-<?= $badgeColor ?>"><?= $tool['badge'] ?></span>
+                                <?php endif; ?>
                                 <span class="tool-count"><?= $toolStats[$key] ?? 0 ?> today</span>
                             </div>
                         </div>
@@ -194,6 +218,7 @@ $currentPage = 'gallery';
         .tool-meta {
             display: flex;
             align-items: center;
+            flex-wrap: wrap;
             gap: 8px;
         }
         .tool-count {
@@ -208,6 +233,8 @@ $currentPage = 'gallery';
         }
         .badge-cyan { background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); }
         .badge-yellow { background: rgba(234, 179, 8, 0.15); color: var(--accent-yellow); }
+        .badge-green { background: rgba(34, 197, 94, 0.15); color: var(--accent-green, #22c55e); }
+        .badge-purple { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple, #a855f7); }
     </style>
 
     <script>

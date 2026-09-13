@@ -1,13 +1,13 @@
 <?php
 /**
- * PixelHop - OCR API (PaddleOCR)
- * Extracts text from images using PaddleOCR via Python
+ * PixelHop - AI HD Upscale API (Real-ESRGAN via ONNX Runtime)
+ * Upscales images 2x/4x without losing quality.
  *
  * POST Parameters:
  * - image: File upload OR
  * - url: URL to fetch image from
- * - language: Language code (default: en)
- * - return: json (default) - always returns JSON
+ * - scale: 2|4 (default: 2)
+ * - return: download|json (default: json)
  */
 
 header('Content-Type: application/json');
@@ -36,7 +36,7 @@ if (!$firewallCheck['allowed']) {
 }
 
 require_once __DIR__ . '/../includes/ImageHandler.php';
-require_once __DIR__ . '/../includes/AiService.php';
+require_once __DIR__ . '/../includes/UpscaleRunner.php';
 require_once __DIR__ . '/../includes/RateLimiter.php';
 require_once __DIR__ . '/../includes/ClientIp.php';
 require_once __DIR__ . '/../auth/middleware.php';
@@ -46,7 +46,7 @@ require_once __DIR__ . '/../core/Gatekeeper.php';
 $gatekeeper = new Gatekeeper();
 
 // Check if tool is disabled
-if (!$gatekeeper->getSetting('tool_ocr_enabled', 1)) {
+if (!$gatekeeper->getSetting('tool_upscale_enabled', 1)) {
     jsonError('This tool is currently disabled for maintenance.', 503);
 }
 
@@ -64,7 +64,7 @@ if ($gatekeeper->getSetting('kill_switch_active', false)) {
 
 // AI tools require login
 if (!isAuthenticated()) {
-    jsonError('Please login to use OCR text extraction. It\'s free!', 401);
+    jsonError('Please login to use AI-powered HD upscaling. It\'s free!', 401);
 }
 
 // Quota enforcement (atomic claim)
@@ -77,31 +77,31 @@ $usageClaimId = null;
 
 if (!$isUserAdmin) {
     $db = Database::getInstance();
-    $ocrLimit = (int)$gatekeeper->getSetting($isPremium ? 'daily_ocr_limit_premium' : 'daily_ocr_limit_free', $isPremium ? 50 : 5);
+    $upscaleLimit = (int)$gatekeeper->getSetting($isPremium ? 'upscale_limit_premium' : 'upscale_limit_free', $isPremium ? 30 : 3);
 
-    // D5-14: single atomic statement. INSERT succeeds only when the user is
-    // still under their daily limit, so concurrent requests cannot all pass
-    // the old SELECT COUNT(*) check before any of them records usage.
-    // usage_logs.status enum has no 'processing'; claim starts as 'failed'
-    // and is flipped to 'success' on completion or DELETEd as a refund.
+    // Single atomic statement: INSERT succeeds only when the user is still
+    // under their daily limit, so concurrent requests cannot all pass a
+    // SELECT COUNT(*) check before any of them records usage. The claim
+    // starts as 'failed' and is flipped to 'success' on completion or
+    // DELETEd as a refund.
     $claimStmt = $db->prepare("
         INSERT INTO usage_logs (user_id, tool_name, status, ip_address, created_at)
-        SELECT ?, 'ocr', 'failed', ?, NOW()
+        SELECT ?, 'upscale', 'failed', ?, NOW()
         FROM DUAL
         WHERE (SELECT COUNT(*) FROM usage_logs
-               WHERE user_id = ? AND tool_name = 'ocr' AND DATE(created_at) = CURDATE()) < ?
+               WHERE user_id = ? AND tool_name = 'upscale' AND DATE(created_at) = CURDATE()) < ?
     ");
-    $claimStmt->execute([$userId, ClientIp::get(), $userId, $ocrLimit]);
+    $claimStmt->execute([$userId, ClientIp::get(), $userId, $upscaleLimit]);
 
     if ($claimStmt->rowCount() === 0) {
-        jsonError('Daily quota exceeded. You have reached your ' . $ocrLimit . ' OCR operations limit for today. ' . ($isPremium ? '' : 'Upgrade to Premium for 50 uses/day!'), 429);
+        jsonError('Daily quota exceeded. You have reached your ' . $upscaleLimit . ' AI HD Upscale operations limit for today. ' . ($isPremium ? '' : 'Upgrade to Premium for 30 uses/day!'), 429);
     }
 
     $usageClaimId = (int)$db->lastInsertId();
 }
 
-// Heavy-tool gate (D5-16): CPU load + concurrency protection before launching Python
-$heavy = $gatekeeper->canRunHeavyTool('ocr', $userId ?: null);
+// Heavy-tool gate: CPU load + concurrency protection before launching Python
+$heavy = $gatekeeper->canRunHeavyTool('upscale', $userId ?: null);
 if (!($heavy['allowed'] ?? true)) {
     if ($usageClaimId !== null) {
         $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
@@ -117,49 +117,20 @@ $rateLimiter->addHeaders($userId);
 
 try {
     $handler = new ImageHandler();
-    $aiService = new AiService(30);
-
+    $upscaleRunner = new UpscaleRunner();
 
     $imageData = getImageInput($handler);
 
-
-    $language = $_POST['language'] ?? 'en';
-
-
-    $validLanguages = AiService::getOcrLanguages();
-
-
-    $langMap = [
-        'eng' => 'en',
-        'chi_sim' => 'ch',
-        'chi_tra' => 'chinese_cht',
-        'jpn' => 'japan',
-        'kor' => 'korean',
-        'fra' => 'fr',
-        'deu' => 'german',
-        'spa' => 'es',
-        'por' => 'pt',
-        'ita' => 'it',
-        'rus' => 'ru',
-        'ara' => 'ar',
-        'tha' => 'th',
-        'vie' => 'vi',
-        'ind' => 'id',
-    ];
-
-
-    if (isset($langMap[$language])) {
-        $language = $langMap[$language];
+    $scale = (int)($_POST['scale'] ?? 2);
+    if ($scale !== 2 && $scale !== 4) {
+        $scale = 2;
     }
 
-    // Reject anything not in the supported language list
-    if (!isset($validLanguages[$language])) {
-        $language = 'en';
-    }
+    $returnType = $_POST['return'] ?? 'json';
 
+    $outputPath = $handler->generateTempPath('png');
 
-    $result = $aiService->performOcr($imageData['path'], $language);
-
+    $result = $upscaleRunner->run($imageData['path'], $outputPath, $scale, 120);
 
     if (!$result['success']) {
         // Refund the atomic claim so a failed attempt does not consume quota.
@@ -171,12 +142,36 @@ try {
         http_response_code($code);
         echo json_encode([
             'success' => false,
-            'error' => 'OCR processing failed. Please try again.',
-            'load_info' => $aiService->getLoadInfo(),
+            'error' => 'AI upscaling failed. Please try again.',
+            'load_info' => [
+                'duration_ms' => $result['duration_ms'] ?? 0,
+                'code' => $code,
+            ],
         ]);
         exit;
     }
 
+    if (!file_exists($result['output_path'])) {
+        if ($usageClaimId !== null) {
+            $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
+            $refundStmt->execute([$usageClaimId]);
+        }
+        jsonError('Output file not generated', 500);
+    }
+
+    $outputData = file_get_contents($result['output_path']);
+    $outputSize = strlen($outputData);
+
+    $originalName = $imageData['original_name'] ?? pathinfo($imageData['filename'], PATHINFO_FILENAME);
+    $downloadName = $originalName . '_upscaled_' . $scale . 'x.png';
+
+    $viewUrl = null;
+    if ($returnType === 'json') {
+        $tempResult = $gatekeeper->saveTempResult($outputData, $downloadName, 'image/png', getCurrentUserId(), 'upscale');
+        if ($tempResult) {
+            $viewUrl = $tempResult['view_url'];
+        }
+    }
 
     $processingTimeMs = $result['duration_ms'] ?? 0;
 
@@ -187,39 +182,59 @@ try {
     }
 
     // Display counter only — the atomic claim row IS the audit record.
-    $gatekeeper->incrementToolDisplayCounter('ocr', getCurrentUserId());
+    $gatekeeper->incrementToolDisplayCounter('upscale', getCurrentUserId());
 
+    if ($returnType === 'json') {
+        $payload = [
+            'success' => true,
+            'original_size' => $result['input_size'] ?? $imageData['size'],
+            'new_size' => $outputSize,
+            'original_width' => $result['width'] ?? $imageData['width'],
+            'original_height' => $result['height'] ?? $imageData['height'],
+            'new_width' => $result['output_width'] ?? 0,
+            'new_height' => $result['output_height'] ?? 0,
+            'scale' => $scale,
+            'duration_ms' => $result['duration_ms'],
+            'view_url' => $viewUrl,
+            'filename' => $downloadName,
+        ];
 
-    echo json_encode([
-        'success' => true,
-        'text' => $result['text'],
-        'blocks' => $result['blocks'],
-        'block_count' => $result['block_count'],
-        'language' => $result['language'],
-        'average_confidence' => $result['average_confidence'],
-        'duration_ms' => $result['duration_ms'],
-        'image' => [
-            'width' => $imageData['width'],
-            'height' => $imageData['height'],
-            'size' => $imageData['size'],
-            'filename' => $imageData['filename'] ?? 'uploaded',
-        ],
-    ], JSON_UNESCAPED_UNICODE);
+        // Inline base64 data only when explicitly requested AND the
+        // output is 3 MB or smaller.  For larger outputs the processing
+        // already succeeded, so we must NOT fail with a 413 — instead
+        // flag data_omitted and let the client fall back to view_url.
+        if (($_POST['include_data'] ?? '') === '1') {
+            if ($outputSize <= 3 * 1024 * 1024) {
+                $payload['data'] = 'data:image/png;base64,' . base64_encode($outputData);
+            } else {
+                $payload['data_omitted'] = true;
+            }
+        }
+
+        echo json_encode($payload);
+    } else {
+        header('Content-Type: image/png');
+        header('Content-Disposition: attachment; filename="' . $downloadName . '"');
+        header('Content-Length: ' . $outputSize);
+        header('X-Scale: ' . $scale);
+        header('X-Duration-Ms: ' . $result['duration_ms']);
+        echo $outputData;
+    }
 
 } catch (InvalidArgumentException $e) {
     if ($usageClaimId !== null) {
         $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
         $refundStmt->execute([$usageClaimId]);
     }
-    error_log('OCR error (InvalidArgumentException): ' . $e->getMessage());
+    error_log('Upscale error (InvalidArgumentException): ' . $e->getMessage());
     jsonError('Invalid input.', 400);
 } catch (Exception $e) {
     if ($usageClaimId !== null) {
         $refundStmt = $db->prepare("DELETE FROM usage_logs WHERE id = ?");
         $refundStmt->execute([$usageClaimId]);
     }
-    error_log('OCR error: ' . $e->getMessage());
-    jsonError('OCR processing failed. Please try again later.', 500);
+    error_log('Upscale error: ' . $e->getMessage());
+    jsonError('AI upscaling failed. Please try again later.', 500);
 }
 
 /**

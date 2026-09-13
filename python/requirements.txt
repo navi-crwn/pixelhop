@@ -1,0 +1,23 @@
+# PixelHop - Python OCR Engine Dependencies
+#
+# Installation:
+#   python3 -m venv /var/www/pichost/python/venv
+#   source /var/www/pichost/python/venv/bin/activate
+#   pip install -r requirements.txt
+#
+# Keep paddleocr>=2.7.0 so PP-OCRv4+ (and PP-OCRv5 where available) exists.
+# Keep opencv-python-headless for the light denoise preprocessing step.
+
+# PaddleOCR - Superior multilingual OCR
+paddlepaddle>=2.6.0
+paddleocr>=2.7.0
+
+# ONNX Runtime - required by upscale (Real-ESRGAN) and erase (LaMa) engines
+onnxruntime>=1.16.0
+
+# NumPy - explicit pin for ONNX pre/post-processing and palette fallback
+numpy>=1.24.0
+
+# Image preprocessing (upscale + denoise fallback)
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0

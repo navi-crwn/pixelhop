@@ -92,6 +92,7 @@ $csrfToken = generateCsrfToken();
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link rel="stylesheet" href="/assets/css/glass.css">
     <style>
@@ -257,6 +258,12 @@ $csrfToken = generateCsrfToken();
             border-radius: 16px;
             padding: 20px;
             text-align: center;
+            transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+        }
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+            border-color: rgba(255, 255, 255, 0.15);
         }
 
         .stat-label {
@@ -269,6 +276,15 @@ $csrfToken = generateCsrfToken();
             align-items: center;
             justify-content: center;
             gap: 6px;
+        }
+
+        .stat-number {
+            font-family: var(--font-display);
+            font-size: 32px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 4px;
+            line-height: 1;
         }
 
         .progress-ring {
@@ -306,6 +322,7 @@ $csrfToken = generateCsrfToken();
         }
 
         .progress-value {
+            font-family: var(--font-display);
             font-size: 18px;
             font-weight: 700;
             color: #fff;
@@ -603,7 +620,7 @@ $csrfToken = generateCsrfToken();
                             stroke-dashoffset="<?= 239 - (min($storagePercent, 100) / 100 * 239) ?>"></circle>
                     </svg>
                     <div class="progress-center">
-                        <div class="progress-value"><?= $storagePercent ?>%</div>
+                        <div class="progress-value" data-target="<?= $storagePercent ?>" data-suffix="%">0%</div>
                         <div class="progress-unit">used</div>
                     </div>
                 </div>
@@ -639,7 +656,7 @@ $csrfToken = generateCsrfToken();
                         <div class="progress-value">∞</div>
                         <div class="progress-unit">unlimited</div>
                         <?php else: ?>
-                        <div class="progress-value"><?= $ocrUsed ?></div>
+                        <div class="progress-value" data-target="<?= $ocrUsed ?>" data-suffix="">0</div>
                         <div class="progress-unit">/ <?= $ocrLimit ?></div>
                         <?php endif; ?>
                     </div>
@@ -676,7 +693,7 @@ $csrfToken = generateCsrfToken();
                         <div class="progress-value">∞</div>
                         <div class="progress-unit">unlimited</div>
                         <?php else: ?>
-                        <div class="progress-value"><?= $rembgUsed ?></div>
+                        <div class="progress-value" data-target="<?= $rembgUsed ?>" data-suffix="">0</div>
                         <div class="progress-unit">/ <?= $rembgLimit ?></div>
                         <?php endif; ?>
                     </div>
@@ -784,12 +801,37 @@ $csrfToken = generateCsrfToken();
             localStorage.setItem('pixelhop-theme', next);
         }
 
+        // Animated counters
+        function animateCounters() {
+            document.querySelectorAll('.progress-value[data-target]').forEach(el => {
+                const target = parseFloat(el.dataset.target);
+                const suffix = el.dataset.suffix || '';
+                if (isNaN(target)) {
+                    el.textContent = el.dataset.target + suffix;
+                    return;
+                }
+                const duration = 1200;
+                const start = performance.now();
+                function step(now) {
+                    const p = Math.min((now - start) / duration, 1);
+                    const eased = 1 - Math.pow(1 - p, 3);
+                    el.textContent = Math.round(target * eased) + suffix;
+                    if (p < 1) requestAnimationFrame(step);
+                }
+                requestAnimationFrame(step);
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            animateCounters();
+        });
+
         // Show admin warning modal if exists
         <?php if ($adminWarning): ?>
         document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('warningModal').style.display = 'flex';
         });
-        
+
         function dismissWarning() {
             document.getElementById('warningModal').style.display = 'none';
             <?php unset($_SESSION['admin_warning']); ?>

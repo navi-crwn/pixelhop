@@ -113,12 +113,14 @@ class AiService
      * @param string $inputPath Path to the input image
      * @param string|null $outputPath Output path (auto-generated if null)
      * @param string $model Model to use (u2net, u2netp, etc.)
+     * @param bool $alphaMatting Enable alpha matting (refined edges)
      * @return array Result with success status and data
      */
     public function removeBackground(
         string $inputPath,
         ?string $outputPath = null,
-        string $model = 'u2net'
+        string $model = 'u2net',
+        bool $alphaMatting = false
     ): array {
 
         if (!$this->checkSystemLoad()) {
@@ -161,30 +163,38 @@ class AiService
         }
 
 
-        $validModels = ['u2net', 'u2netp', 'u2net_human_seg', 'u2net_cloth_seg', 'silueta', 'isnet-general-use'];
-        if (!in_array($model, $validModels)) {
+        $validModels = array_keys(self::getRembgModels());
+        if (!in_array($model, $validModels, true)) {
             $model = 'u2net';
         }
 
 
-        $rembgTimeout = max($this->timeout, 60);
+        // BiRefNet runs on CPU without a GPU; give it more headroom.
+        if (str_contains($model, 'birefnet')) {
+            $rembgTimeout = max($this->timeout, 90);
+        } else {
+            $rembgTimeout = max($this->timeout, 60);
+        }
+
+        $alphaFlag = $alphaMatting ? ' --alpha-matting' : '';
         $command = sprintf(
-            'timeout %ds %s %s %s %s %s 2>/dev/null',
+            'timeout %ds %s %s %s %s %s%s 2>/dev/null',
             $rembgTimeout,
             escapeshellarg(self::PYTHON_BIN),
             escapeshellarg($scriptPath),
             escapeshellarg($inputPath),
             escapeshellarg($outputPath),
-            escapeshellarg($model)
+            escapeshellarg($model),
+            $alphaFlag
         );
 
-        return $this->executeCommand($command, 'Background removal');
+        return $this->executeCommand($command, 'Background removal', $rembgTimeout);
     }
 
     /**
      * Execute a command and parse JSON output
      */
-    private function executeCommand(string $command, string $operation): array
+    private function executeCommand(string $command, string $operation, ?int $timeout = null): array
     {
         $startTime = microtime(true);
 
@@ -199,7 +209,7 @@ class AiService
         if ($exitCode === 124) {
             return [
                 'success' => false,
-                'error' => $operation . ' timed out after ' . $this->timeout . ' seconds',
+                'error' => $operation . ' timed out after ' . ($timeout ?? $this->timeout) . ' seconds',
                 'code' => 504,
                 'duration_ms' => $duration,
             ];
@@ -301,6 +311,8 @@ class AiService
             'u2net_human_seg' => 'U2-Net Human (Optimized for people)',
             'silueta' => 'Silueta (Fast, general purpose)',
             'isnet-general-use' => 'IS-Net (High quality)',
+            'birefnet-general' => 'BiRefNet General (HD quality, slow)',
+            'birefnet-portrait' => 'BiRefNet Portrait (HD quality, slow)',
         ];
     }
 }

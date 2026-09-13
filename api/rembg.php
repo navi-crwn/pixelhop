@@ -6,7 +6,8 @@
  * POST Parameters:
  * - image: File upload OR
  * - url: URL to fetch image from
- * - model: u2net|u2netp|u2net_human_seg|silueta (default: u2net)
+ * - model: u2net|u2netp|u2net_human_seg|silueta|isnet-general-use|birefnet-general|birefnet-portrait (default: u2net)
+ * - alpha_matting: 0|1 (default: 0)
  * - return: download|json (default: download)
  */
 
@@ -125,10 +126,11 @@ try {
 
     $model = $_POST['model'] ?? 'u2net';
     $returnType = $_POST['return'] ?? 'download';
+    $alphaMatting = filter_var($_POST['alpha_matting'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
 
     $validModels = array_keys(AiService::getRembgModels());
-    if (!in_array($model, $validModels)) {
+    if (!in_array($model, $validModels, true)) {
         $model = 'u2net';
     }
 
@@ -136,7 +138,7 @@ try {
     $outputPath = $handler->generateTempPath('png');
 
 
-    $result = $aiService->removeBackground($imageData['path'], $outputPath, $model);
+    $result = $aiService->removeBackground($imageData['path'], $outputPath, $model, $alphaMatting);
 
 
     if (!$result['success']) {
@@ -189,7 +191,8 @@ try {
         $finalizeStmt->execute([$imageData['size'], $processingTimeMs, $usageClaimId]);
     }
 
-    $gatekeeper->recordToolUsage('rembg', getCurrentUserId() ?? 0, $imageData['size'], $processingTimeMs, 'success');
+    // Display counter only — the atomic claim row IS the audit record.
+    $gatekeeper->incrementToolDisplayCounter('rembg', getCurrentUserId());
 
     if ($returnType === 'json') {
         $payload = [
@@ -206,11 +209,15 @@ try {
 
         // D5-21: never base64 the whole PNG by default. Keep memory bounded by
         // only attaching inline data when explicitly requested AND <= 3MB.
+        // Larger successful outputs stay available through view_url and are
+        // marked as omitted inline data rather than returning a 413 after
+        // quota has already been finalized.
         if (($_POST['include_data'] ?? '') === '1') {
             if ($outputSize > 3 * 1024 * 1024) {
-                jsonError('Output is too large to inline (' . round($outputSize / 1024 / 1024, 1) . ' MB). Use the view_url instead.', 413);
+                $payload['data_omitted'] = true;
+            } else {
+                $payload['data'] = 'data:image/png;base64,' . base64_encode($outputData);
             }
-            $payload['data'] = 'data:image/png;base64,' . base64_encode($outputData);
         }
 
         echo json_encode($payload);

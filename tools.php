@@ -26,6 +26,11 @@ $toolStatus = [
     'convert' => $gatekeeper->getSetting('tool_convert_enabled', 1),
     'ocr' => $gatekeeper->getSetting('tool_ocr_enabled', 1),
     'rembg' => $gatekeeper->getSetting('tool_rembg_enabled', 1),
+    'upscale' => $gatekeeper->getSetting('tool_upscale_enabled', 1),
+    'erase' => $gatekeeper->getSetting('tool_erase_enabled', 1),
+    'faceblur' => $gatekeeper->getSetting('tool_faceblur_enabled', 1),
+    'palette' => $gatekeeper->getSetting('tool_palette_enabled', 1),
+    'qr' => $gatekeeper->getSetting('tool_qr_enabled', 1),
 ];
 ?>
 <!DOCTYPE html>
@@ -74,10 +79,11 @@ $toolStatus = [
         }
     </script>
 
-    <!-- Google Fonts -->
+    <!-- Google Fonts - Inter & Space Grotesk -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
@@ -254,7 +260,30 @@ $toolStatus = [
             max-width: 600px;
             max-height: 90vh;
             overflow-y: auto;
-            padding: 32px;
+            padding: 0;
+        }
+
+        .modal-content h2 {
+            position: sticky;
+            top: 0;
+            margin: 0;
+            padding: 20px 24px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border-bottom: 1px solid var(--glass-border);
+            z-index: 20;
+        }
+
+        .modal-content > form {
+            padding: 24px;
+        }
+
+        .modal-content form button[type="submit"] {
+            position: sticky;
+            bottom: 0;
+            margin-top: 20px;
+            z-index: 20;
         }
 
         .modal-content::before {
@@ -476,6 +505,72 @@ $toolStatus = [
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        .before-after-wrap {
+            position: relative;
+            width: 100%;
+            overflow: hidden;
+            border-radius: var(--radius-xl);
+            border: 1px solid var(--glass-border);
+            background: var(--color-bg-secondary);
+            isolation: isolate;
+            touch-action: none;
+        }
+
+        .before-after-wrap img {
+            display: block;
+            width: 100%;
+            height: auto;
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+
+        .before-after-wrap .before-layer,
+        .before-after-wrap .after-layer {
+            position: absolute;
+            inset: 0;
+            overflow: hidden;
+        }
+
+        .before-after-wrap .before-layer img,
+        .before-after-wrap .after-layer img {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .before-after-slider {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background: linear-gradient(to bottom, rgba(34,211,238,0.85), rgba(168,85,247,0.85));
+            transform: translateX(-50%);
+            cursor: ew-resize;
+            z-index: 10;
+            box-shadow: 0 0 15px rgba(34,211,238,0.4);
+        }
+
+        .before-after-handle {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 40px;
+            height: 40px;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            background: rgba(15, 22, 41, 0.85);
+            border: 2px solid rgba(255,255,255,0.25);
+            backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            pointer-events: none;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
     </style>
 </head>
 <body class="min-h-screen font-sans overflow-x-hidden">
@@ -584,16 +679,106 @@ $toolStatus = [
                 </div>
             </div>
 
-            <!-- Tools Grid -->
-            <div class="tool-grid">
+            <!-- AI Tools Section -->
+            <div class="mb-10">
+                <h2 class="text-xl font-bold mb-5 flex items-center gap-2" style="color: var(--color-text-primary);">
+                    <i data-lucide="sparkles" class="w-5 h-5 text-neon-purple"></i>
+                    AI Tools
+                </h2>
+                <div class="tool-grid">
+<?php foreach (ph_tool_registry() as $phTool): if (($phTool['section'] ?? 'quick') !== 'ai') continue; $phToolSection = 'card'; $partial = ToolRegistry::partial($phTool['id']); if (file_exists($partial)) require $partial; endforeach; ?>
+                </div>
+            </div>
 
-<?php foreach (ph_tool_registry() as $phTool): $phToolSection = 'card'; require ToolRegistry::partial($phTool['id']); endforeach; ?>
+            <!-- Quick Tools Section -->
+            <div class="mb-10">
+                <h2 class="text-xl font-bold mb-5 flex items-center gap-2" style="color: var(--color-text-primary);">
+                    <i data-lucide="zap" class="w-5 h-5 text-neon-cyan"></i>
+                    Quick Tools
+                </h2>
+                <div class="tool-grid">
+<?php foreach (ph_tool_registry() as $phTool):
+    if (($phTool['section'] ?? 'quick') !== 'quick') continue;
+    if ($phTool['id'] === 'qr'):
+        /* QR tool is client-side and has no server partial */
+?>
+                <!-- QR Code -->
+                <div class="tool-card" onclick="openModal('qr')">
+                    <div class="tool-icon" style="background: linear-gradient(135deg, #22d3ee, #10b981);">
+                        <i data-lucide="qr-code" class="w-7 h-7 text-white"></i>
+                    </div>
+                    <h3 class="text-lg font-semibold mb-2" style="color: var(--color-text-primary);">
+                        QR Code
+                        <span class="inline-block px-2 py-0.5 text-xs font-medium bg-gradient-to-r from-neon-cyan to-neon-purple text-white rounded-full ml-2">Instant</span>
+                    </h3>
+                    <p class="text-sm" style="color: var(--color-text-tertiary);">
+                        Generate a shareable QR code for any image URL in your browser.
+                    </p>
+                </div>
+<?php else:
+    $phToolSection = 'card';
+    $partial = ToolRegistry::partial($phTool['id']);
+    if (file_exists($partial)) require $partial;
+    endif;
+endforeach; ?>
+                </div>
             </div>
 
         </div>
     </main>
 
-<?php foreach (ph_tool_registry() as $phTool): $phToolSection = 'modal'; require ToolRegistry::partial($phTool['id']); endforeach; ?>
+<?php foreach (ph_tool_registry() as $phTool):
+    $phToolSection = 'modal';
+    $partial = ToolRegistry::partial($phTool['id']);
+    if (file_exists($partial)) require $partial;
+endforeach; ?>
+
+    <!-- QR Code Modal (client-side, no server endpoint) -->
+    <div id="modal-qr" class="tool-modal">
+        <div class="modal-backdrop" onclick="closeModal('qr')"></div>
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal('qr')">
+                <i data-lucide="x" class="w-5 h-5" style="color: var(--color-text-secondary);"></i>
+            </button>
+
+            <h2 class="text-xl font-bold mb-6" style="color: var(--color-text-primary);">
+                <i data-lucide="qr-code" class="w-6 h-6 inline-block mr-2 text-cyan-400"></i>
+                QR Code
+                <span class="inline-block px-2 py-0.5 text-xs font-medium bg-gradient-to-r from-neon-cyan to-neon-purple text-white rounded-full ml-2">Instant</span>
+            </h2>
+
+            <form id="qr-form" onsubmit="handleQR(event)">
+                <div class="form-group">
+                    <label class="form-label">Image URL</label>
+                    <input type="url" id="qr-url" class="form-input" placeholder="https://p.hel.ink/i/abc123" required>
+                </div>
+
+                <div class="processing" id="qr-processing">
+                    <div class="spinner"></div>
+                    <span style="color: var(--color-text-secondary);">Generating...</span>
+                </div>
+
+                <div class="result-area" id="qr-result">
+                    <div class="text-center mb-4 p-4" style="background: white; border-radius: 12px; display: inline-block;">
+                        <canvas id="qr-canvas" style="display:block; margin:0 auto;"></canvas>
+                    </div>
+                    <p class="text-center text-sm mb-4" style="color: var(--color-text-secondary);" id="qr-dimensions"></p>
+                    <button type="button" class="btn-primary w-full" id="qr-download">
+                        <i data-lucide="download" class="w-4 h-4"></i>
+                        Download PNG
+                    </button>
+                </div>
+
+                <button type="submit" class="btn-primary w-full mt-4" id="qr-submit">
+                    <i data-lucide="qr-code" class="w-4 h-4"></i>
+                    Generate QR
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script src="/assets/js/qrcode-button.js"></script>
+
     <!-- Footer -->
     <footer class="relative z-10 text-center py-8 px-4">
         <p class="text-sm" style="color: var(--color-text-muted);">
@@ -629,22 +814,35 @@ $toolStatus = [
 
 
         const isLoggedIn = <?= $isLoggedIn ? 'true' : 'false' ?>;
-        const aiTools = ['ocr', 'rembg'];
+        const aiTools = ['ocr', 'rembg', 'upscale', 'erase', 'faceblur'];
 
         function openModal(tool) {
 
             if (window.toolStatus && window.toolStatus[tool] === 0) {
-                alert('This tool is currently disabled for maintenance.');
+                showToast('This tool is currently disabled for maintenance.', 'error');
                 return;
             }
 
 
             if (aiTools.includes(tool) && !isLoggedIn) {
-                requireLogin(tool === 'ocr' ? 'OCR' : 'Remove Background');
+                const names = {
+                    ocr: 'OCR',
+                    rembg: 'Remove Background',
+                    upscale: 'AI HD Upscale',
+                    erase: 'Magic Eraser',
+                    faceblur: 'Face Blur'
+                };
+                requireLogin(names[tool] || tool);
                 return;
             }
 
-            document.getElementById('modal-' + tool).classList.add('active');
+            const modal = document.getElementById('modal-' + tool);
+            if (!modal) {
+                showToast('Tool modal not found.', 'error');
+                return;
+            }
+
+            modal.classList.add('active');
             document.body.style.overflow = 'hidden';
             lucide.createIcons();
         }
@@ -672,7 +870,7 @@ $toolStatus = [
         });
 
 
-        const tools = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg'];
+        const tools = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg', 'upscale', 'erase', 'palette'];
         const fileData = {};
 
         tools.forEach(tool => {
@@ -708,7 +906,7 @@ $toolStatus = [
 
         function handleFile(tool, file) {
             if (!file.type.startsWith('image/')) {
-                alert('Please select an image file');
+                showToast('Please select an image file', 'error');
                 return;
             }
 
@@ -741,11 +939,16 @@ $toolStatus = [
                     };
                     tempImg.src = e.target.result;
                 }
+
+                if (tool === 'erase' && typeof window.setupEraseEditor === 'function') {
+                    window.setupEraseEditor(e.target.result);
+                }
             };
             reader.readAsDataURL(file);
 
 
-            document.getElementById(tool + '-result').classList.remove('show');
+            const resultArea = document.getElementById(tool + '-result');
+            if (resultArea) resultArea.classList.remove('show');
         }
 
         function formatSize(bytes) {
@@ -758,7 +961,7 @@ $toolStatus = [
         async function handleCompress(e) {
             e.preventDefault();
             if (!fileData.compress) {
-                alert('Please select an image first');
+                showToast('Please select an image first', 'error');
                 return;
             }
 
@@ -798,7 +1001,7 @@ $toolStatus = [
 
                 result.classList.add('show');
             } catch (err) {
-                alert('Error: ' + err.message);
+                showToast('Error: ' + err.message, 'error');
             }
 
             processing.classList.remove('show');
@@ -809,7 +1012,7 @@ $toolStatus = [
         async function handleResize(e) {
             e.preventDefault();
             if (!fileData.resize) {
-                alert('Please select an image first');
+                showToast('Please select an image first', 'error');
                 return;
             }
 
@@ -817,7 +1020,7 @@ $toolStatus = [
             const height = document.getElementById('resize-height').value;
 
             if (!width && !height) {
-                alert('Please specify width or height');
+                showToast('Please specify width or height', 'error');
                 return;
             }
 
@@ -857,7 +1060,7 @@ $toolStatus = [
 
                 result.classList.add('show');
             } catch (err) {
-                alert('Error: ' + err.message);
+                showToast('Error: ' + err.message, 'error');
             }
 
             processing.classList.remove('show');
@@ -868,7 +1071,7 @@ $toolStatus = [
         async function handleCrop(e) {
             e.preventDefault();
             if (!fileData.crop) {
-                alert('Please select an image first');
+                showToast('Please select an image first', 'error');
                 return;
             }
 
@@ -906,7 +1109,7 @@ $toolStatus = [
 
                 result.classList.add('show');
             } catch (err) {
-                alert('Error: ' + err.message);
+                showToast('Error: ' + err.message, 'error');
             }
 
             processing.classList.remove('show');
@@ -917,7 +1120,7 @@ $toolStatus = [
         async function handleConvert(e) {
             e.preventDefault();
             if (!fileData.convert) {
-                alert('Please select an image first');
+                showToast('Please select an image first', 'error');
                 return;
             }
 
@@ -954,7 +1157,7 @@ $toolStatus = [
 
                 result.classList.add('show');
             } catch (err) {
-                alert('Error: ' + err.message);
+                showToast('Error: ' + err.message, 'error');
             }
 
             processing.classList.remove('show');
@@ -965,7 +1168,7 @@ $toolStatus = [
         async function handleOCR(e) {
             e.preventDefault();
             if (!fileData.ocr) {
-                alert('Please select an image first');
+                showToast('Please select an image first', 'error');
                 return;
             }
 
@@ -1008,7 +1211,7 @@ $toolStatus = [
 
                 result.classList.add('show');
             } catch (err) {
-                alert('Error: ' + err.message);
+                showToast('Error: ' + err.message, 'error');
             }
 
             processing.classList.remove('show');
@@ -1019,7 +1222,7 @@ $toolStatus = [
         async function handleRembg(e) {
             e.preventDefault();
             if (!fileData.rembg) {
-                alert('Please select an image first');
+                showToast('Please select an image first', 'error');
                 return;
             }
 
@@ -1033,7 +1236,16 @@ $toolStatus = [
 
             const formData = new FormData();
             formData.append('image', fileData.rembg);
+            const modelEl = document.getElementById('rembg-model');
+            if (modelEl) {
+                formData.append('model', modelEl.value);
+            }
+            const alphaEl = document.getElementById('rembg-alpha-matting');
+            if (alphaEl) {
+                formData.append('alpha_matting', alphaEl.checked ? '1' : '0');
+            }
             formData.append('return', 'json');
+            formData.append('include_data', '1');
 
             try {
                 const response = await fetch('/api/rembg.php', {
@@ -1047,21 +1259,236 @@ $toolStatus = [
 
                 document.getElementById('rembg-original-size').textContent = formatSize(data.original_size);
                 document.getElementById('rembg-new-size').textContent = formatSize(data.new_size);
-                document.getElementById('rembg-result-image').src = data.data;
+
+                const resultUrl = data.data || data.view_url;
+                const originalSrc = document.querySelector('#rembg-preview img')?.src || '';
+                buildBeforeAfter('rembg', originalSrc, resultUrl, data.filename);
 
                 document.getElementById('rembg-download').onclick = () => {
-                    downloadDataUrl(data.data, data.filename);
+                    if (data.data) {
+                        downloadDataUrl(data.data, data.filename);
+                    } else if (data.view_url) {
+                        const a = document.createElement('a');
+                        a.href = data.view_url;
+                        a.download = data.filename || 'nobg.png';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }
                 };
 
                 result.classList.add('show');
             } catch (err) {
-                alert('Error: ' + err.message);
+                showToast('Error: ' + err.message, 'error');
             }
 
             processing.classList.remove('show');
             submit.disabled = false;
         }
 
+
+        async function handleUpscale(e) {
+            e.preventDefault();
+            if (!fileData.upscale) {
+                showToast('Please select an image first', 'error');
+                return;
+            }
+
+            const processing = document.getElementById('upscale-processing');
+            const result = document.getElementById('upscale-result');
+            const submit = document.getElementById('upscale-submit');
+
+            processing.classList.add('show');
+            result.classList.remove('show');
+            submit.disabled = true;
+
+            const formData = new FormData();
+            formData.append('image', fileData.upscale);
+            formData.append('scale', document.getElementById('upscale-scale').value);
+            formData.append('include_data', '1');
+            formData.append('return', 'json');
+
+            try {
+                const response = await fetch('/api/upscale.php', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.error) throw new Error(data.error);
+
+                document.getElementById('upscale-original-size').textContent = formatSize(data.original_size || 0);
+                document.getElementById('upscale-new-size').textContent = formatSize(data.new_size || 0);
+                document.getElementById('upscale-dimensions').textContent =
+                    `${data.original_width || '?'}×${data.original_height || '?'} → ${data.new_width || '?'}×${data.new_height || '?'}`;
+
+                const resultUrl = data.data || data.view_url;
+                const originalSrc = document.querySelector('#upscale-preview img')?.src || '';
+                buildBeforeAfter('upscale', originalSrc, resultUrl, data.filename);
+
+                document.getElementById('upscale-download').onclick = () => {
+                    if (data.data) {
+                        downloadDataUrl(data.data, data.filename);
+                    } else if (data.view_url) {
+                        const a = document.createElement('a');
+                        a.href = data.view_url;
+                        a.download = data.filename || 'upscaled.png';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }
+                };
+
+                result.classList.add('show');
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+
+            processing.classList.remove('show');
+            submit.disabled = false;
+        }
+
+
+        async function handleErase(e) {
+            e.preventDefault();
+            if (!fileData.erase) {
+                showToast('Please select an image first', 'error');
+                return;
+            }
+            if (typeof window.hasEraseMask === 'function' && !window.hasEraseMask()) {
+                showToast('Please paint the area to erase first', 'error');
+                return;
+            }
+
+            const processing = document.getElementById('erase-processing');
+            const result = document.getElementById('erase-result');
+            const submit = document.getElementById('erase-submit');
+
+            processing.classList.add('show');
+            result.classList.remove('show');
+            submit.disabled = true;
+
+            const formData = new FormData();
+            formData.append('image', fileData.erase);
+            // Send mask as a POST string (data URL) — backend reads $_POST['mask']
+            if (typeof window.renderEraseMask === 'function') {
+                const maskDataUrl = window.renderEraseMask();
+                if (maskDataUrl) {
+                    formData.append('mask', maskDataUrl);
+                }
+            }
+            formData.append('return', 'json');
+            formData.append('include_data', '1');
+
+            try {
+                const response = await fetch('/api/erase.php', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.error) throw new Error(data.error);
+
+                document.getElementById('erase-original-size').textContent = formatSize(data.original_size || 0);
+                document.getElementById('erase-new-size').textContent = formatSize(data.new_size || 0);
+
+                const resultUrl = data.data || data.view_url;
+                const originalSrc = document.querySelector('#erase-preview img')?.src || '';
+                buildBeforeAfter('erase', originalSrc, resultUrl, data.filename);
+
+                document.getElementById('erase-download').onclick = () => {
+                    if (data.data) {
+                        downloadDataUrl(data.data, data.filename);
+                    } else if (data.view_url) {
+                        const a = document.createElement('a');
+                        a.href = data.view_url;
+                        a.download = data.filename || 'erased.png';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }
+                };
+
+                result.classList.add('show');
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+
+            processing.classList.remove('show');
+            submit.disabled = false;
+        }
+
+
+        function handleQR(e) {
+            e.preventDefault();
+
+            const urlInput = document.getElementById('qr-url');
+            const text = urlInput ? urlInput.value.trim() : '';
+
+            if (!text) {
+                if (typeof showToast === 'function') {
+                    showToast('Please enter an image URL or text', 'error');
+                }
+                return;
+            }
+
+            const processing = document.getElementById('qr-processing');
+            const result = document.getElementById('qr-result');
+            const submit = document.getElementById('qr-submit');
+            const canvasPlaceholder = document.getElementById('qr-canvas');
+            const dimensionsEl = document.getElementById('qr-dimensions');
+            const downloadBtn = document.getElementById('qr-download');
+
+            if (processing) processing.classList.add('show');
+            if (result) result.classList.remove('show');
+            if (submit) submit.disabled = true;
+
+            try {
+                if (typeof generateQR !== 'function') {
+                    throw new Error('QR generator library is not loaded');
+                }
+
+                const canvasParent = canvasPlaceholder ? canvasPlaceholder.parentElement : null;
+                if (!canvasParent) {
+                    throw new Error('QR container not found');
+                }
+
+                const canvas = generateQR(text, canvasParent, {
+                    size: 220,
+                    level: 'M',
+                    fgColor: '#000000',
+                    bgColor: '#ffffff'
+                });
+                canvas.id = 'qr-canvas';
+                canvas.style.display = 'block';
+                canvas.style.margin = '0 auto';
+
+                if (dimensionsEl) {
+                    dimensionsEl.textContent = `${canvas.width} × ${canvas.height} px`;
+                }
+
+                if (downloadBtn) {
+                    downloadBtn.onclick = () => {
+                        const dataUrl = canvas.toDataURL('image/png');
+                        downloadDataUrl(dataUrl, 'pixelhop-qr.png');
+                    };
+                }
+
+                if (result) result.classList.add('show');
+                lucide.createIcons();
+            } catch (err) {
+                if (typeof showToast === 'function') {
+                    showToast('Error: ' + err.message, 'error');
+                }
+            } finally {
+                if (processing) processing.classList.remove('show');
+                if (submit) submit.disabled = false;
+            }
+        }
+
+        window.handleQR = handleQR;
 
         function downloadDataUrl(dataUrl, filename) {
             const link = document.createElement('a');
@@ -1096,7 +1523,111 @@ $toolStatus = [
         }
 
 
-        if (window.autoOpenTool && ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg'].includes(window.autoOpenTool)) {
+        function initBeforeAfter(container) {
+            if (!container) return;
+
+            const beforeLayer = container.querySelector('.before-layer');
+            const slider = container.querySelector('.before-after-slider');
+            const beforeImg = container.querySelector('.before-layer img');
+            const afterImg = container.querySelector('.after-layer img');
+            if (!beforeLayer || !slider || !beforeImg || !afterImg) return;
+
+            let isDragging = false;
+
+            function updatePosition(clientX) {
+                const rect = container.getBoundingClientRect();
+                let x = clientX - rect.left;
+                x = Math.max(0, Math.min(x, rect.width));
+                const percent = (x / rect.width) * 100;
+                beforeLayer.style.width = percent + '%';
+                slider.style.left = percent + '%';
+            }
+
+            slider.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                e.preventDefault();
+            });
+            slider.addEventListener('touchstart', (e) => {
+                isDragging = true;
+            }, { passive: true });
+
+            window.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                updatePosition(e.clientX);
+            });
+            window.addEventListener('touchmove', (e) => {
+                if (!isDragging) return;
+                updatePosition(e.touches[0].clientX);
+            }, { passive: true });
+
+            window.addEventListener('mouseup', () => isDragging = false);
+            window.addEventListener('touchend', () => isDragging = false);
+
+            container.addEventListener('click', (e) => {
+                if (e.target === slider || slider.contains(e.target)) return;
+                updatePosition(e.clientX);
+            });
+        }
+
+        window.initBeforeAfter = initBeforeAfter;
+
+        function buildBeforeAfter(tool, originalUrl, resultUrl, filename) {
+            const resultArea = document.getElementById(tool + '-result');
+            const beforeContainer = resultArea ? (resultArea.querySelector('.before-after-wrap') || resultArea.querySelector('.text-center')) : null;
+            if (!beforeContainer || !originalUrl || !resultUrl) return;
+
+            const safeFilename = (filename || 'result.png').replace(/[^A-Za-z0-9._-]/g, '_') || 'result.png';
+
+            const wrap = document.createElement('div');
+            wrap.className = 'before-after-wrap';
+            wrap.style.maxHeight = '320px';
+
+            const afterLayer = document.createElement('div');
+            afterLayer.className = 'after-layer';
+
+            const afterImg = document.createElement('img');
+            afterImg.src = resultUrl;
+            afterImg.alt = 'Result: ' + safeFilename;
+            afterImg.style.objectFit = 'contain';
+            afterImg.style.background = 'repeating-conic-gradient(#808080 0% 25%, transparent 0% 50%) 50% / 16px 16px';
+            afterLayer.appendChild(afterImg);
+
+            const beforeLayer = document.createElement('div');
+            beforeLayer.className = 'before-layer';
+            beforeLayer.style.width = '50%';
+
+            const beforeImg = document.createElement('img');
+            beforeImg.src = originalUrl;
+            beforeImg.alt = 'Original';
+            beforeImg.style.objectFit = 'contain';
+            beforeLayer.appendChild(beforeImg);
+
+            const slider = document.createElement('div');
+            slider.className = 'before-after-slider';
+            slider.style.left = '50%';
+
+            const handle = document.createElement('div');
+            handle.className = 'before-after-handle';
+
+            const icon = document.createElement('i');
+            icon.setAttribute('data-lucide', 'move-horizontal');
+            icon.className = 'w-4 h-4';
+            handle.appendChild(icon);
+            slider.appendChild(handle);
+
+            wrap.appendChild(afterLayer);
+            wrap.appendChild(beforeLayer);
+            wrap.appendChild(slider);
+
+            beforeContainer.replaceChildren(wrap);
+
+            lucide.createIcons();
+            initBeforeAfter(wrap);
+        }
+
+        window.buildBeforeAfter = buildBeforeAfter;
+
+        if (window.autoOpenTool && ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg', 'upscale', 'erase', 'faceblur', 'palette', 'qr'].includes(window.autoOpenTool)) {
             setTimeout(() => {
                 openModal(window.autoOpenTool);
             }, 300);

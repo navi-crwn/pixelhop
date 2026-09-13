@@ -43,6 +43,31 @@
                     <p class="text-sm mt-2" style="color: var(--color-text-muted);" id="rembg-filename"></p>
                 </div>
 
+                <div class="form-group mt-6">
+                    <label class="form-label" for="rembg-model">Model</label>
+                    <select class="form-select" id="rembg-model">
+                        <option value="u2net" selected>U²-Net (Default, fast)</option>
+                        <option value="isnet-general-use">IS-Net (Better for general objects)</option>
+                        <option value="u2net_human_seg">U²-Net Human (Portraits / people)</option>
+                        <option value="birefnet-general">HD Quality (BiRefNet General)</option>
+                        <option value="birefnet-portrait">HD Quality (BiRefNet Portrait)</option>
+                    </select>
+                    <p class="text-xs mt-2" id="rembg-model-hint" style="color: var(--color-text-muted);">
+                        Fast models take a few seconds. HD Quality is slower (~30-60 detik), tepi paling tajam.
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label class="auth-checkbox" for="rembg-alpha-matting" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                        <input type="checkbox" id="rembg-alpha-matting" style="position: absolute; opacity: 0; width: 18px; height: 18px; cursor: pointer;">
+                        <span class="checkmark"></span>
+                        <span style="color: var(--color-text-secondary); font-size: 14px; font-weight: 500;">Refine edges (alpha matting)</span>
+                    </label>
+                    <p class="text-xs mt-2" style="color: var(--color-text-muted);">
+                        Slower, but produces smoother edges on hair and fine details.
+                    </p>
+                </div>
+
                 <div class="processing" id="rembg-processing">
                     <div class="spinner"></div>
                     <span style="color: var(--color-text-secondary);">Removing background... This may take a moment.</span>

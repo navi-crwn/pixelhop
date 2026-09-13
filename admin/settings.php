@@ -32,12 +32,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
     switch ($action) {
         case 'save_all':
             $settings = json_decode($_POST['settings'] ?? '{}', true);
+            if (!is_array($settings)) {
+                $settings = [];
+            }
+            // Keys that must be validated as non-negative numbers before saving.
+            // Prevents garbage strings from being persisted into limit settings.
+            $numericKeys = [
+                'max_concurrent_processes', 'cpu_load_threshold',
+                'daily_ocr_limit_free', 'daily_ocr_limit_premium',
+                'daily_removebg_limit_free', 'daily_removebg_limit_premium',
+                'upscale_limit_free', 'upscale_limit_premium',
+                'erase_limit_free', 'erase_limit_premium',
+                'faceblur_limit_free', 'faceblur_limit_premium',
+                'palette_limit_guest',
+            ];
             $saved = 0;
+            $rejected = 0;
             foreach ($settings as $key => $value) {
+                if (in_array($key, $numericKeys, true)) {
+                    if (!is_scalar($value) || preg_match('/^\d+(\.\d+)?$/', trim((string) $value)) !== 1) {
+                        $rejected++;
+                        continue;
+                    }
+                    $value = strpos((string) $value, '.') === false ? (int) $value : (float) $value;
+                }
                 $gatekeeper->updateSetting($key, $value);
                 $saved++;
             }
-            echo json_encode(['success' => true, 'saved' => $saved]);
+            echo json_encode(['success' => true, 'saved' => $saved, 'rejected' => $rejected]);
             break;
 
         default:
@@ -56,6 +78,13 @@ $settings = [
     'daily_ocr_limit_premium' => $gatekeeper->getSetting('daily_ocr_limit_premium'),
     'daily_removebg_limit_free' => $gatekeeper->getSetting('daily_removebg_limit_free'),
     'daily_removebg_limit_premium' => $gatekeeper->getSetting('daily_removebg_limit_premium'),
+    'upscale_limit_free' => $gatekeeper->getSetting('upscale_limit_free', 3),
+    'upscale_limit_premium' => $gatekeeper->getSetting('upscale_limit_premium', 30),
+    'erase_limit_free' => $gatekeeper->getSetting('erase_limit_free', 3),
+    'erase_limit_premium' => $gatekeeper->getSetting('erase_limit_premium', 30),
+    'faceblur_limit_free' => $gatekeeper->getSetting('faceblur_limit_free', 10),
+    'faceblur_limit_premium' => $gatekeeper->getSetting('faceblur_limit_premium', 100),
+    'palette_limit_guest' => $gatekeeper->getSetting('palette_limit_guest', 20),
 ];
 
 $csrfToken = generateCsrfToken();
@@ -69,6 +98,7 @@ $currentPage = 'settings';
     <title>Settings - Admin - PixelHop</title>
     <link rel="icon" type="image/svg+xml" href="/assets/img/logo.svg">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link rel="stylesheet" href="/admin/includes/admin-styles.css">
     <script src="/admin/includes/admin-scripts.js"></script>
@@ -195,6 +225,109 @@ $currentPage = 'settings';
                             </div>
                         </div>
                     </div>
+
+                    <!-- Daily AI HD Upscale Limits -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <i data-lucide="zoom-in" class="w-5 h-5"></i>
+                                Daily AI HD Upscale Limits
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Free Users (per day)</label>
+                            <div class="number-input-inline">
+                                <button type="button" onclick="adjustValue('upscale_limit_free', -1, 0, 100)">−</button>
+                                <input type="number" id="upscale_limit_free" value="<?= $settings['upscale_limit_free'] ?>" min="0" readonly>
+                                <button type="button" onclick="adjustValue('upscale_limit_free', 1, 0, 100)">+</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Premium Users (per day)</label>
+                            <div class="number-input-inline">
+                                <button type="button" onclick="adjustValue('upscale_limit_premium', -5, 0, 500)">−</button>
+                                <input type="number" id="upscale_limit_premium" value="<?= $settings['upscale_limit_premium'] ?>" min="0" readonly>
+                                <button type="button" onclick="adjustValue('upscale_limit_premium', 5, 0, 500)">+</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Daily Magic Eraser Limits -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <i data-lucide="wand-2" class="w-5 h-5"></i>
+                                Daily Magic Eraser Limits
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Free Users (per day)</label>
+                            <div class="number-input-inline">
+                                <button type="button" onclick="adjustValue('erase_limit_free', -1, 0, 100)">−</button>
+                                <input type="number" id="erase_limit_free" value="<?= $settings['erase_limit_free'] ?>" min="0" readonly>
+                                <button type="button" onclick="adjustValue('erase_limit_free', 1, 0, 100)">+</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Premium Users (per day)</label>
+                            <div class="number-input-inline">
+                                <button type="button" onclick="adjustValue('erase_limit_premium', -5, 0, 500)">−</button>
+                                <input type="number" id="erase_limit_premium" value="<?= $settings['erase_limit_premium'] ?>" min="0" readonly>
+                                <button type="button" onclick="adjustValue('erase_limit_premium', 5, 0, 500)">+</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Daily Face Blur Limits -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <i data-lucide="scan-face" class="w-5 h-5"></i>
+                                Daily Face Blur Limits
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Free Users (per day)</label>
+                            <div class="number-input-inline">
+                                <button type="button" onclick="adjustValue('faceblur_limit_free', -1, 0, 100)">−</button>
+                                <input type="number" id="faceblur_limit_free" value="<?= $settings['faceblur_limit_free'] ?>" min="0" readonly>
+                                <button type="button" onclick="adjustValue('faceblur_limit_free', 1, 0, 100)">+</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Premium Users (per day)</label>
+                            <div class="number-input-inline">
+                                <button type="button" onclick="adjustValue('faceblur_limit_premium', -5, 0, 500)">−</button>
+                                <input type="number" id="faceblur_limit_premium" value="<?= $settings['faceblur_limit_premium'] ?>" min="0" readonly>
+                                <button type="button" onclick="adjustValue('faceblur_limit_premium', 5, 0, 500)">+</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Daily Color Palette Limit -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <i data-lucide="palette" class="w-5 h-5"></i>
+                                Daily Color Palette Limit
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Guest Users (per day, per IP)</label>
+                            <div class="number-input-inline">
+                                <button type="button" onclick="adjustValue('palette_limit_guest', -1, 0, 100)">−</button>
+                                <input type="number" id="palette_limit_guest" value="<?= $settings['palette_limit_guest'] ?>" min="0" readonly>
+                                <button type="button" onclick="adjustValue('palette_limit_guest', 1, 0, 100)">+</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Save Button -->
@@ -262,6 +395,13 @@ $currentPage = 'settings';
                     daily_ocr_limit_premium: document.getElementById('daily_ocr_limit_premium').value,
                     daily_removebg_limit_free: document.getElementById('daily_removebg_limit_free').value,
                     daily_removebg_limit_premium: document.getElementById('daily_removebg_limit_premium').value,
+                    upscale_limit_free: document.getElementById('upscale_limit_free').value,
+                    upscale_limit_premium: document.getElementById('upscale_limit_premium').value,
+                    erase_limit_free: document.getElementById('erase_limit_free').value,
+                    erase_limit_premium: document.getElementById('erase_limit_premium').value,
+                    faceblur_limit_free: document.getElementById('faceblur_limit_free').value,
+                    faceblur_limit_premium: document.getElementById('faceblur_limit_premium').value,
+                    palette_limit_guest: document.getElementById('palette_limit_guest').value,
                 };
                 
                 const fd = new FormData();

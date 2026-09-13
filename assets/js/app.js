@@ -16,7 +16,28 @@ const uploadQueue = {
 document.addEventListener('DOMContentLoaded', () => {
     // Initialize Lucide Icons
     lucide.createIcons();
-    
+
+    // Inject toast styles if not present
+    if (!document.getElementById('toast-styles')) {
+        const toastStyle = document.createElement('style');
+        toastStyle.id = 'toast-styles';
+        toastStyle.textContent = `
+            #toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; max-width: 360px; width: calc(100% - 48px); pointer-events: none; }
+            .toast-item { display: flex; align-items: center; gap: 12px; padding: 14px 18px; background: rgba(15, 22, 41, 0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.35); color: white; font-size: 14px; font-weight: 500; opacity: 0; transform: translateX(40px); transition: opacity 0.35s ease, transform 0.35s ease; pointer-events: auto; }
+            .toast-in { opacity: 1; transform: translateX(0); }
+            .toast-out { opacity: 0; transform: translateX(40px); }
+            .toast-success { border-color: rgba(74, 222, 128, 0.4); }
+            .toast-success .toast-icon { color: #4ade80; }
+            .toast-error { border-color: rgba(248, 113, 113, 0.4); }
+            .toast-error .toast-icon { color: #f87171; }
+            .toast-info .toast-icon { color: var(--color-neon-cyan, #22d3ee); }
+            .toast-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+            .toast-message { flex: 1; line-height: 1.4; }
+            [data-theme="light"] .toast-item { background: rgba(255, 255, 255, 0.95); border-color: rgba(0,0,0,0.08); color: #1a1f35; box-shadow: 0 10px 40px rgba(0,0,0,0.12); }
+        `;
+        document.head.appendChild(toastStyle);
+    }
+
     // Initialize all components
     initThemeToggle();
     initAnimatedBackground();
@@ -462,7 +483,7 @@ function handleFiles(files) {
     });
     
     if (validFiles.length === 0) {
-        showNotification('Please select valid image files (JPG, PNG, GIF, WebP, max 10MB)', 'error');
+        showToast('Please select valid image files (JPG, PNG, GIF, WebP, max 10MB)', 'error');
         return;
     }
     
@@ -751,7 +772,7 @@ function cancelAllUploads() {
         }
     });
     
-    showNotification('Uploads cancelled', 'info');
+    showToast('Uploads cancelled', 'info');
 }
 
 /**
@@ -1000,11 +1021,11 @@ function copyToClipboard(inputId) {
     input.setSelectionRange(0, 99999);
     
     navigator.clipboard.writeText(input.value).then(() => {
-        showNotification('Copied to clipboard!', 'success');
+        showToast('Copied to clipboard!', 'success');
     }).catch(() => {
         // Fallback
         document.execCommand('copy');
-        showNotification('Copied to clipboard!', 'success');
+        showToast('Copied to clipboard!', 'success');
     });
 }
 
@@ -1028,43 +1049,46 @@ function resetUpload() {
 }
 
 /**
- * Show notification toast
+ * Show toast notification (bottom-right, auto-dismiss ~3.5s)
  */
-function showNotification(message, type = 'info') {
-    // Remove existing notification
-    const existing = document.querySelector('.notification-toast');
-    if (existing) existing.remove();
-    
-    // Create notification
-    const notification = document.createElement('div');
-    notification.className = `notification-toast notification-${type}`;
-    
-    const icon = type === 'success' ? 'check-circle' : type === 'error' ? 'alert-circle' : 'info';
-    
-    notification.innerHTML = `
-        <i data-lucide="${icon}" class="w-5 h-5"></i>
-        <span>${message}</span>
+function showToast(message, type = 'info') {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:10px;max-width:360px;width:calc(100% - 48px);pointer-events:none;';
+        document.body.appendChild(container);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = 'toast-item toast-' + type;
+
+    const icons = {
+        success: 'check-circle',
+        error: 'x-circle',
+        info: 'info'
+    };
+
+    toast.innerHTML = `
+        <div class="toast-icon"><i data-lucide="${icons[type] || icons.info}" class="w-5 h-5"></i></div>
+        <div class="toast-message">${message}</div>
     `;
-    
-    document.body.appendChild(notification);
+
+    container.appendChild(toast);
     lucide.createIcons();
-    
-    // Animate in
-    gsap.fromTo(notification,
-        { opacity: 0, y: 50, x: '-50%' },
-        { opacity: 1, y: 0, duration: 0.4, ease: 'back.out(1.7)' }
-    );
-    
-    // Auto remove after 3 seconds
+
+    requestAnimationFrame(() => {
+        toast.classList.add('toast-in');
+    });
+
     setTimeout(() => {
-        gsap.to(notification, {
-            opacity: 0,
-            y: 50,
-            duration: 0.3,
-            onComplete: () => notification.remove()
-        });
-    }, 3000);
+        toast.classList.remove('toast-in');
+        toast.classList.add('toast-out');
+        setTimeout(() => toast.remove(), 350);
+    }, 3500);
 }
+
+window.showToast = showToast;
 
 /**
  * Bento Cards Interactivity

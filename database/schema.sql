@@ -220,7 +220,7 @@ CREATE TABLE `temp_files` (
 DROP TABLE IF EXISTS `usage_logs`;
 CREATE TABLE `usage_logs` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-  `user_id` int(10) unsigned NOT NULL,
+  `user_id` int(10) unsigned DEFAULT NULL,
   `tool_name` varchar(50) NOT NULL,
   `file_size` bigint(20) unsigned DEFAULT 0,
   `processing_time_ms` int(10) unsigned DEFAULT 0,
@@ -230,7 +230,7 @@ CREATE TABLE `usage_logs` (
   PRIMARY KEY (`id`),
   KEY `idx_user_tool_date` (`user_id`,`tool_name`,`created_at`),
   KEY `idx_created_at` (`created_at`),
-  CONSTRAINT `usage_logs_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+  CONSTRAINT `usage_logs_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=15 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------

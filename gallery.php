@@ -188,6 +188,7 @@ function proxyUrlForVariant(array $img, string $size): string {
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link rel="stylesheet" href="/assets/css/glass.css">
     <style>
@@ -300,6 +301,13 @@ function proxyUrlForVariant(array $img, string $size): string {
         .gallery-item:hover { transform: scale(1.02); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4); }
         .gallery-item.selected { border-color: #22d3ee; box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.3); }
         .gallery-item img { width: 100%; height: 100%; object-fit: cover; }
+        .gallery-item .skeleton {
+            position: absolute; inset: 0;
+            z-index: 1;
+        }
+        .gallery-item img.loaded + .skeleton,
+        .gallery-item img.loaded ~ .skeleton,
+        .gallery-item .skeleton.hidden { display: none; }
         .gallery-checkbox {
             position: absolute; top: 10px; left: 10px;
             width: 24px; height: 24px; border-radius: 6px;
@@ -344,8 +352,15 @@ function proxyUrlForVariant(array $img, string $size): string {
         .pagination a { background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.8); }
         .pagination a:hover { background: rgba(255, 255, 255, 0.12); }
         .pagination .info { color: rgba(255, 255, 255, 0.5); }
-        .empty-state { text-align: center; padding: 60px 20px; color: rgba(255, 255, 255, 0.4); }
-        .empty-icon { width: 64px; height: 64px; margin: 0 auto 16px; opacity: 0.5; }
+        .empty-state { text-align: center; padding: 80px 24px; color: rgba(255, 255, 255, 0.4); }
+        .empty-icon {
+            width: 96px; height: 96px;
+            margin: 0 auto 24px;
+            opacity: 0.4;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        .empty-title { font-size: 1.25rem; font-weight: 600; color: #fff; margin-bottom: 8px; }
+        .empty-text { font-size: 0.875rem; color: rgba(255, 255, 255, 0.5); margin-bottom: 20px; }
         .upload-btn {
             display: inline-flex; align-items: center; gap: 8px;
             padding: 12px 24px; border-radius: 12px;
@@ -402,10 +417,61 @@ function proxyUrlForVariant(array $img, string $size): string {
         .toast.show { transform: translateY(0); opacity: 1; }
         .toast-success { background: rgba(34, 197, 94, 0.9); color: #fff; }
         .toast-error { background: rgba(239, 68, 68, 0.9); color: #fff; }
+        .lightbox {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.92);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .lightbox.show { display: flex; }
+        .lightbox img {
+            max-width: 90vw;
+            max-height: 85vh;
+            object-fit: contain;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        }
+        .lightbox-close,
+        .lightbox-prev,
+        .lightbox-next {
+            position: absolute;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff;
+            border-radius: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        .lightbox-close:hover,
+        .lightbox-prev:hover,
+        .lightbox-next:hover { background: rgba(255,255,255,0.2); }
+        .lightbox-close { top: 20px; right: 20px; width: 44px; height: 44px; }
+        .lightbox-prev { left: 20px; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; }
+        .lightbox-next { right: 20px; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; }
+        .lightbox-counter {
+            position: absolute;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.7);
+            font-size: 13px;
+            background: rgba(0,0,0,0.4);
+            padding: 6px 14px;
+            border-radius: 20px;
+        }
         @media (max-width: 768px) {
             .nav-links { display: none; }
             .toolbar { flex-direction: column; align-items: stretch; }
             .toolbar-left, .toolbar-right { justify-content: center; }
+            .lightbox-prev, .lightbox-next { display: none; }
         }
     </style>
 </head>
@@ -436,9 +502,11 @@ function proxyUrlForVariant(array $img, string $size): string {
 
         <?php if (empty($userImages)): ?>
         <div class="empty-state">
-            <i data-lucide="image-off" class="empty-icon"></i>
-            <h2 class="text-lg font-semibold text-white mb-2">No images yet</h2>
-            <p class="text-sm">Start uploading images to build your gallery</p>
+            <div class="empty-icon">
+                <i data-lucide="images" class="w-full h-full"></i>
+            </div>
+            <h2 class="empty-title">Your gallery is empty</h2>
+            <p class="empty-text">Upload your first image to see it here</p>
             <a href="/member/upload" class="upload-btn"><i data-lucide="upload" class="w-4 h-4"></i> Upload Image</a>
         </div>
         <?php else: ?>
@@ -478,13 +546,15 @@ function proxyUrlForVariant(array $img, string $size): string {
         </div>
 
         <div class="gallery-grid" id="galleryGrid">
-            <?php foreach ($pagedImages as $img): 
+            <?php $index = 0; foreach ($pagedImages as $img):
                 $thumbUrl = proxyUrlForVariant($img, 'thumb') ?: proxyUrlForVariant($img, 'medium') ?: proxyUrlForVariant($img, 'original');
                 $originalUrl = proxyUrlForVariant($img, 'original');
             ?>
-            <div class="gallery-item" data-id="<?= htmlspecialchars($img['id']) ?>">
+            <div class="gallery-item" data-id="<?= htmlspecialchars($img['id']) ?>" data-full="<?= htmlspecialchars($originalUrl) ?>" data-index="<?= $index ?>">
+                <?php $index++; ?>
                 <div class="gallery-checkbox"><i data-lucide="check" class="w-4 h-4 text-white"></i></div>
-                <img src="<?= htmlspecialchars($thumbUrl) ?>" alt="" loading="lazy" onerror="this.src='/assets/img/placeholder.png'">
+                <img src="<?= htmlspecialchars($thumbUrl) ?>" alt="" loading="lazy" onload="this.classList.add('loaded'); this.nextElementSibling?.classList.add('hidden');" onerror="this.src='/assets/img/placeholder.png'; this.classList.add('loaded'); this.nextElementSibling?.classList.add('hidden');">
+                <div class="skeleton"></div>
                 <div class="gallery-overlay">
                     <div class="gallery-filename"><?= htmlspecialchars($img['filename'] ?? $img['id']) ?></div>
                     <div class="gallery-info">
@@ -530,6 +600,21 @@ function proxyUrlForVariant(array $img, string $size): string {
 
     <div id="toast" class="toast"></div>
 
+    <!-- Lightbox -->
+    <div id="lightbox" class="lightbox" onclick="closeLightbox(event)">
+        <button class="lightbox-close" onclick="closeLightbox(event)" title="Close">
+            <i data-lucide="x" class="w-6 h-6"></i>
+        </button>
+        <button class="lightbox-prev" onclick="changeLightbox(-1)" title="Previous">
+            <i data-lucide="chevron-left" class="w-6 h-6"></i>
+        </button>
+        <img src="" alt="" id="lightboxImg" onclick="event.stopPropagation()">
+        <button class="lightbox-next" onclick="changeLightbox(1)" title="Next">
+            <i data-lucide="chevron-right" class="w-6 h-6"></i>
+        </button>
+        <div class="lightbox-counter" id="lightboxCounter"></div>
+    </div>
+
     <script>
         lucide.createIcons();
         const csrfToken = '<?= $csrfToken ?>';
@@ -562,14 +647,54 @@ function proxyUrlForVariant(array $img, string $size): string {
             document.getElementById('deselectAllBtn').style.display = count > 0 ? 'flex' : 'none';
         }
 
-        document.querySelectorAll('.gallery-item').forEach(item => {
+        const galleryItems = Array.from(document.querySelectorAll('.gallery-item'));
+        let lightboxIndex = -1;
+
+        galleryItems.forEach(item => {
             item.addEventListener('click', (e) => {
                 if (e.target.closest('.gallery-actions') || e.target.closest('a')) return;
                 const id = item.dataset.id;
-                if (selectedItems.has(id)) { selectedItems.delete(id); item.classList.remove('selected'); }
-                else { selectedItems.add(id); item.classList.add('selected'); }
-                updateSelectionUI();
+                if (selectedItems.size > 0 || e.target.closest('.gallery-checkbox')) {
+                    if (selectedItems.has(id)) { selectedItems.delete(id); item.classList.remove('selected'); }
+                    else { selectedItems.add(id); item.classList.add('selected'); }
+                    updateSelectionUI();
+                    return;
+                }
+                openLightbox(parseInt(item.dataset.index, 10));
             });
+        });
+
+        function openLightbox(index) {
+            const items = galleryItems;
+            if (items.length === 0) return;
+            lightboxIndex = ((index % items.length) + items.length) % items.length;
+            const item = items[lightboxIndex];
+            const fullUrl = item.dataset.full;
+            const img = document.getElementById('lightboxImg');
+            img.src = fullUrl;
+            document.getElementById('lightboxCounter').textContent = (lightboxIndex + 1) + ' / ' + items.length;
+            document.getElementById('lightbox').classList.add('show');
+            document.body.style.overflow = 'hidden';
+            document.querySelectorAll('.lightbox-prev, .lightbox-next').forEach(el => {
+                el.style.display = items.length > 1 ? 'flex' : 'none';
+            });
+        }
+
+        function closeLightbox(e) {
+            if (e && e.target !== e.currentTarget && !e.target.closest('.lightbox-close')) return;
+            document.getElementById('lightbox').classList.remove('show');
+            document.body.style.overflow = '';
+        }
+
+        function changeLightbox(delta) {
+            openLightbox(lightboxIndex + delta);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (!document.getElementById('lightbox').classList.contains('show')) return;
+            if (e.key === 'Escape') closeLightbox();
+            if (e.key === 'ArrowLeft') changeLightbox(-1);
+            if (e.key === 'ArrowRight') changeLightbox(1);
         });
 
         document.getElementById('selectAllBtn').addEventListener('click', () => {

@@ -202,16 +202,20 @@ $lastViewed = isset($image['last_viewed_at']) ? formatDate($image['last_viewed_a
         }
     </script>
 
-    <!-- Google Fonts -->
+    <!-- Google Fonts - Inter & Space Grotesk -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 
     <!-- GSAP -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+
+    <!-- Offline QR Generator -->
+    <script src="/assets/js/qrcode-button.js"></script>
 
     <!-- Custom Styles -->
     <link rel="stylesheet" href="/assets/css/glass.css">
@@ -366,6 +370,65 @@ $lastViewed = isset($image['last_viewed_at']) ? formatDate($image['last_viewed_a
             color: var(--color-bg-primary);
             border-color: var(--color-neon-cyan);
         }
+
+        .qr-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(4px);
+            z-index: 1001;
+            align-items: center;
+            justify-content: center;
+        }
+        .qr-modal.show { display: flex; }
+        .qr-modal-content {
+            background: var(--color-bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            max-width: 320px;
+            width: 90%;
+            text-align: center;
+        }
+        .qr-modal-title {
+            color: var(--color-text-primary);
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+        .qr-modal canvas {
+            border-radius: 12px;
+            background: #fff;
+            margin-bottom: 1rem;
+        }
+        .qr-modal-actions {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+        }
+        .qr-btn {
+            padding: 0.625rem 1rem;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+            border: none;
+        }
+        .qr-btn-primary {
+            background: linear-gradient(135deg, var(--neon-cyan), var(--neon-purple));
+            color: white;
+        }
+        .qr-btn-secondary {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--color-text-primary);
+        }
     </style>
 </head>
 <body class="min-h-screen font-sans overflow-x-hidden">
@@ -440,6 +503,9 @@ $lastViewed = isset($image['last_viewed_at']) ? formatDate($image['last_viewed_a
                                 <input type="text" class="link-input" value="<?= $siteUrl ?>/<?= $imageId ?>" readonly id="link-share">
                                 <button class="copy-btn" onclick="copyLink('link-share', this)" title="Copy">
                                     <i data-lucide="copy" class="w-4 h-4"></i>
+                                </button>
+                                <button class="copy-btn" onclick="openQrModal('<?= htmlspecialchars($siteUrl . '/' . $imageId, ENT_QUOTES) ?>')" title="Get QR">
+                                    <i data-lucide="qr-code" class="w-4 h-4"></i>
                                 </button>
                             </div>
                         </div>
@@ -640,6 +706,31 @@ $lastViewed = isset($image['last_viewed_at']) ? formatDate($image['last_viewed_a
             });
         }
 
+        let currentQrUrl = '';
+        function openQrModal(url) {
+            currentQrUrl = url;
+            const container = document.getElementById('qrContainer');
+            container.innerHTML = '';
+            const canvas = generateQR(url, container, { size: 220, level: 'M', fgColor: '#000000', bgColor: '#ffffff' });
+            canvas.id = 'qrCanvas';
+            document.getElementById('qrModal').classList.add('show');
+            lucide.createIcons();
+        }
+
+        function closeQrModal(e) {
+            if (e && e.target !== e.currentTarget) return;
+            document.getElementById('qrModal').classList.remove('show');
+        }
+
+        function downloadQr() {
+            const canvas = document.getElementById('qrCanvas');
+            if (!canvas) return;
+            const a = document.createElement('a');
+            a.href = canvas.toDataURL('image/png');
+            a.download = 'pixelhop-qr.png';
+            a.click();
+        }
+
 
         const mainImage = document.getElementById('main-image');
         if (mainImage) {
@@ -711,6 +802,26 @@ $lastViewed = isset($image['last_viewed_at']) ? formatDate($image['last_viewed_a
             }
         }
     </script>
+
+    <!-- QR Modal -->
+    <div id="qrModal" class="qr-modal" onclick="closeQrModal(event)">
+        <div class="qr-modal-content" onclick="event.stopPropagation()">
+            <div class="qr-modal-title">
+                <i data-lucide="qr-code" class="w-5 h-5"></i>
+                QR Code
+            </div>
+            <div id="qrContainer"></div>
+            <div class="qr-modal-actions">
+                <button class="qr-btn qr-btn-primary" onclick="downloadQr()">
+                    <i data-lucide="download" class="w-4 h-4"></i>
+                    Download
+                </button>
+                <button class="qr-btn qr-btn-secondary" onclick="closeQrModal()">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
 
     <!-- Report Modal -->
     <div id="reportModal" class="report-modal">

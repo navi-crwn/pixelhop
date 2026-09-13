@@ -37,6 +37,19 @@ class Gatekeeper
     public const ERROR_DAILY_LIMIT = 'daily_limit_exceeded';
     public const ERROR_CONCURRENT = 'too_many_processes';
 
+    /**
+     * Heavy (Python) AI tools. Gated by CPU load + concurrency before a
+     * Python process is spawned (canRunHeavyTool). Tool identifiers are
+     * normalized (see normalizeToolName()), so 'rembg' => 'removebg'.
+     */
+    public const HEAVY_TOOLS = ['ocr', 'removebg', 'upscale', 'erase', 'faceblur'];
+
+    /**
+     * Light (PHP / instant) tools. Gated by per-IP / per-user daily caps
+     * (canRunLightTool) and recorded via recordLightToolUsage().
+     */
+    public const LIGHT_TOOLS = ['compress', 'resize', 'crop', 'convert', 'palette'];
+
     public function __construct()
     {
         $this->db = Database::getInstance();
@@ -109,6 +122,13 @@ class Gatekeeper
             'daily_ocr_limit_premium' => 50,
             'daily_removebg_limit_free' => 3,
             'daily_removebg_limit_premium' => 30,
+            'upscale_limit_free' => 3,
+            'upscale_limit_premium' => 30,
+            'erase_limit_free' => 3,
+            'erase_limit_premium' => 30,
+            'faceblur_limit_free' => 10,
+            'faceblur_limit_premium' => 100,
+            'palette_limit_guest' => 20,
             'storage_limit_free' => 262144000,
             'storage_limit_premium' => 5368709120,
             'temp_file_lifetime_hours' => 6,
@@ -318,11 +338,23 @@ class Gatekeeper
 
                 $accountType = $user['account_type'] ?? 'free';
                 $normalizedTool = $this->normalizeToolName($toolName);
-                $limitKey = "daily_{$normalizedTool}_limit_{$accountType}";
-                $countKey = "daily_{$normalizedTool}_count";
+                $limitKey = $this->heavyToolLimitKey($normalizedTool, $accountType);
+                $countColumn = $this->heavyToolCountColumn($normalizedTool);
 
-                $dailyLimit = $this->getSetting($limitKey, $normalizedTool === 'ocr' ? 5 : 3);
-                $dailyCount = (int) ($user[$countKey] ?? 0);
+                $dailyLimit = $this->getSetting(
+                    $limitKey,
+                    $this->heavyToolDefaultLimit($normalizedTool, $accountType)
+                );
+
+                // Tools without a per-user display counter column enforce
+                // their own daily quota atomically in the API endpoint
+                // (via usage_logs), so here only the CPU/concurrency gate
+                // above applies.
+                if ($countColumn === null) {
+                    return $this->allow(['limit' => $dailyLimit, 'tool' => $toolName]);
+                }
+
+                $dailyCount = (int) ($user[$countColumn] ?? 0);
 
                 if ($dailyCount >= $dailyLimit) {
                     return $this->deny(
@@ -339,7 +371,35 @@ class Gatekeeper
     }
 
     /**
-     * Increment usage counter for a tool
+     * Increment only the user's daily display counter for a tool.
+     *
+     * Atomic-claim API endpoints already have one usage_logs row for the
+     * operation. This method updates users.daily_*_count without inserting
+     * another audit row.
+     */
+    public function incrementToolDisplayCounter(string $toolName, int $userId): void
+    {
+        try {
+            $normalizedTool = $this->normalizeToolName($toolName);
+            $countColumn = $this->heavyToolCountColumn($normalizedTool);
+
+            if ($countColumn === null) {
+                return;
+            }
+
+            $this->resetDailyCountersIfNeeded($userId);
+            $stmt = $this->db->prepare("UPDATE users SET {$countColumn} = {$countColumn} + 1 WHERE id = ?");
+            $stmt->execute([$userId]);
+        } catch (Exception $e) {
+            error_log('Gatekeeper: Failed to increment display counter - ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Increment usage counter for a tool and write its usage log.
+     *
+     * Use incrementToolDisplayCounter() instead when the caller already
+     * claimed an operation in usage_logs.
      */
     public function recordToolUsage(string $toolName, int $userId, int $fileSize = 0, int $processingTimeMs = 0, string $status = 'success'): bool
     {
@@ -352,18 +412,14 @@ class Gatekeeper
             //   usage_logs. Do not remove them.
             // - site_settings holds the LIMITS.
             //
-            // Only AI tools (ocr / removebg synonyms) increment the display
-            // counter columns. Light tools (compress/resize/crop/convert) do
-            // NOT touch daily_*_count; they are still written to usage_logs
-            // for audit/limits below.
+            // Only AI tools with a display counter column (ocr / removebg)
+            // increment daily_*_count. Newer heavy tools (upscale / erase /
+            // faceblur) have no counter column and enforce their quota from
+            // usage_logs in their API endpoint. Light tools (compress/resize/
+            // crop/convert/palette) also do NOT touch daily_*_count; they are
+            // still written to usage_logs for audit/limits below.
             $normalizedTool = $this->normalizeToolName($toolName);
-            $countColumn = null;
-
-            if ($normalizedTool === 'ocr') {
-                $countColumn = 'daily_ocr_count';
-            } elseif ($normalizedTool === 'removebg') {
-                $countColumn = 'daily_removebg_count';
-            }
+            $countColumn = $this->heavyToolCountColumn($normalizedTool);
 
             if ($countColumn !== null) {
                 $this->resetDailyCountersIfNeeded($userId);
@@ -926,6 +982,66 @@ class Gatekeeper
         }
 
         return $toolName;
+    }
+
+    /**
+     * Whether a (possibly un-normalized) tool identifier is a heavy AI tool.
+     */
+    public function isHeavyTool(string $toolName): bool
+    {
+        return in_array($this->normalizeToolName($toolName), self::HEAVY_TOOLS, true);
+    }
+
+    /**
+     * Whether a (possibly un-normalized) tool identifier is a light tool.
+     */
+    public function isLightTool(string $toolName): bool
+    {
+        return in_array($this->normalizeToolName($toolName), self::LIGHT_TOOLS, true);
+    }
+
+    /**
+     * Map a normalized heavy tool to its users.daily_*_count display column,
+     * or null when the tool has no per-user counter column (its quota is
+     * enforced from usage_logs inside the API endpoint).
+     */
+    private function heavyToolCountColumn(string $normalizedTool): ?string
+    {
+        return match ($normalizedTool) {
+            'ocr' => 'daily_ocr_count',
+            'removebg' => 'daily_removebg_count',
+            default => null,
+        };
+    }
+
+    /**
+     * site_settings key holding the daily limit for a normalized heavy tool.
+     * Legacy AI tools use the daily_<tool>_limit_<account> scheme; newer
+     * heavy tools use <tool>_limit_<account>.
+     */
+    private function heavyToolLimitKey(string $normalizedTool, string $accountType): string
+    {
+        return match ($normalizedTool) {
+            'ocr', 'removebg' => "daily_{$normalizedTool}_limit_{$accountType}",
+            default => "{$normalizedTool}_limit_{$accountType}",
+        };
+    }
+
+    /**
+     * Default daily limit for a normalized heavy tool, used only when the
+     * corresponding site_settings row is missing/corrupt.
+     */
+    private function heavyToolDefaultLimit(string $normalizedTool, string $accountType): int
+    {
+        $defaults = [
+            'ocr' => ['free' => 5, 'premium' => 50],
+            'removebg' => ['free' => 3, 'premium' => 30],
+            'upscale' => ['free' => 3, 'premium' => 30],
+            'erase' => ['free' => 3, 'premium' => 30],
+            'faceblur' => ['free' => 10, 'premium' => 100],
+        ];
+
+        return $defaults[$normalizedTool][$accountType] ?? 3;
     }
 
     private function resetDailyCountersIfNeeded(int $userId, ?array $user = null): void

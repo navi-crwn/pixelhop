@@ -98,13 +98,17 @@ function resultFormatRelative($timestamp) {
         }
     </script>
 
-    <!-- Google Fonts -->
+    <!-- Google Fonts - Inter & Space Grotesk -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+
+    <!-- Offline QR Generator -->
+    <script src="/assets/js/qrcode-button.js"></script>
 
     <!-- Custom Styles -->
     <link rel="stylesheet" href="/assets/css/glass.css">
@@ -448,6 +452,134 @@ function resultFormatRelative($timestamp) {
             font-size: 0.875rem;
         }
 
+        /* QR Modal */
+        .qr-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(4px);
+            z-index: 1001;
+            align-items: center;
+            justify-content: center;
+        }
+        .qr-modal.show { display: flex; }
+        .qr-modal-content {
+            background: var(--color-bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            max-width: 320px;
+            width: 90%;
+            text-align: center;
+        }
+        .qr-modal-title {
+            color: var(--color-text-primary);
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+        .qr-modal canvas {
+            border-radius: 12px;
+            background: #fff;
+            margin-bottom: 1rem;
+        }
+        .qr-modal-actions {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+        }
+        .qr-btn {
+            padding: 0.625rem 1rem;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+            border: none;
+        }
+        .qr-btn-primary {
+            background: linear-gradient(135deg, var(--neon-cyan), var(--neon-purple));
+            color: white;
+        }
+        .qr-btn-secondary {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--color-text-primary);
+        }
+
+        /* Before-After Slider */
+        .ba-slider-wrap {
+            position: relative;
+            width: 100%;
+            overflow: hidden;
+            border-radius: var(--radius-xl);
+            border: 1px solid var(--glass-border);
+            background: var(--color-bg-secondary);
+            margin-bottom: 1rem;
+            isolation: isolate;
+            user-select: none;
+        }
+        .ba-slider-wrap img {
+            display: block;
+            width: 100%;
+            height: auto;
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+        .ba-after-layer,
+        .ba-before-layer {
+            position: absolute;
+            inset: 0;
+            overflow: hidden;
+        }
+        .ba-before-layer img,
+        .ba-after-layer img {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .ba-handle {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background: rgba(255,255,255,0.9);
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            transform: translateX(-50%);
+            cursor: ew-resize;
+            z-index: 3;
+        }
+        .ba-handle::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.95);
+            box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+        }
+        .ba-knob {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            color: var(--color-bg-primary);
+            z-index: 4;
+            pointer-events: none;
+        }
+
         /* Copy All Section */
         .copy-all-section {
             background: linear-gradient(135deg, rgba(34, 211, 238, 0.1), rgba(168, 85, 247, 0.1));
@@ -690,12 +822,32 @@ function resultFormatRelative($timestamp) {
                             <img src="<?php echo htmlspecialchars($thumbUrl); ?>" alt="">
                         </div>
                         <div class="info">
-                            <h3><?php echo htmlspecialchars($img['filename'] ?? $id); ?></h3>
+                            <h3>
+                                <?php if (!empty($img['tool']) || !empty($img['processed_by'])): ?>
+                                    <span class="badge-ai"><i data-lucide="sparkles" class="w-3 h-3"></i> AI</span>
+                                <?php endif; ?>
+                                <?php echo htmlspecialchars($img['filename'] ?? $id); ?>
+                            </h3>
                             <p><?php echo resultFormatSize($img['size'] ?? 0); ?> • <?php echo ($img['width'] ?? 0); ?>×<?php echo ($img['height'] ?? 0); ?></p>
                         </div>
                         <i data-lucide="chevron-down" class="w-5 h-5 chevron"></i>
                     </div>
                     <div class="image-details">
+                        <?php if (!empty($img['source_url']) && !empty($directUrl) && $directUrl !== ($img['source_url'] ?? '')): ?>
+                        <!-- Before/After Slider for AI tool results -->
+                        <div class="ba-slider-wrap" id="ba-slider-<?php echo $id; ?>">
+                            <img src="<?php echo htmlspecialchars($img['source_url']); ?>" alt="Before" style="visibility:hidden;">
+                            <div class="ba-after-layer">
+                                <img src="<?php echo htmlspecialchars($directUrl); ?>" alt="After">
+                            </div>
+                            <div class="ba-before-layer" style="width:50%;">
+                                <img src="<?php echo htmlspecialchars($img['source_url']); ?>" alt="Before">
+                            </div>
+                            <div class="ba-handle" style="left:50%;"></div>
+                            <i data-lucide="move-horizontal" class="ba-knob"></i>
+                        </div>
+                        <?php endif; ?>
+
                         <!-- View Link -->
                         <div class="link-group">
                             <label>View Page</label>
@@ -704,6 +856,10 @@ function resultFormatRelative($timestamp) {
                                 <button class="copy-btn" onclick="copyToClipboard('<?php echo htmlspecialchars($viewUrl); ?>', this)">
                                     <i data-lucide="copy" class="w-4 h-4"></i>
                                     Copy
+                                </button>
+                                <button class="copy-btn" onclick="openQrModal('<?php echo htmlspecialchars($viewUrl, ENT_QUOTES); ?>')">
+                                    <i data-lucide="qr-code" class="w-4 h-4"></i>
+                                    Get QR
                                 </button>
                             </div>
                         </div>
@@ -716,6 +872,10 @@ function resultFormatRelative($timestamp) {
                                 <button class="copy-btn" onclick="copyToClipboard('<?php echo htmlspecialchars($directUrl); ?>', this)">
                                     <i data-lucide="copy" class="w-4 h-4"></i>
                                     Copy
+                                </button>
+                                <button class="copy-btn" onclick="openQrModal('<?php echo htmlspecialchars($directUrl, ENT_QUOTES); ?>')">
+                                    <i data-lucide="qr-code" class="w-4 h-4"></i>
+                                    Get QR
                                 </button>
                             </div>
                         </div>
@@ -858,6 +1018,26 @@ function resultFormatRelative($timestamp) {
             <i data-lucide="check" class="w-4 h-4"></i>
             <span id="toast-message">Copied!</span>
         </span>
+    </div>
+
+    <!-- QR Modal -->
+    <div id="qrModal" class="qr-modal" onclick="closeQrModal(event)">
+        <div class="qr-modal-content" onclick="event.stopPropagation()">
+            <div class="qr-modal-title">
+                <i data-lucide="qr-code" class="w-5 h-5"></i>
+                QR Code
+            </div>
+            <div id="qrContainer"></div>
+            <div class="qr-modal-actions">
+                <button class="qr-btn qr-btn-primary" onclick="downloadQr()">
+                    <i data-lucide="download" class="w-4 h-4"></i>
+                    Download
+                </button>
+                <button class="qr-btn qr-btn-secondary" onclick="closeQrModal()">
+                    Close
+                </button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -1012,6 +1192,68 @@ function resultFormatRelative($timestamp) {
             div.textContent = text;
             return div.innerHTML;
         }
+
+        let currentQrUrl = '';
+        function openQrModal(url) {
+            currentQrUrl = url;
+            const container = document.getElementById('qrContainer');
+            container.innerHTML = '';
+            const canvas = generateQR(url, container, { size: 220, level: 'M', fgColor: '#000000', bgColor: '#ffffff' });
+            canvas.id = 'qrCanvas';
+            document.getElementById('qrModal').classList.add('show');
+            lucide.createIcons();
+        }
+
+        function closeQrModal(e) {
+            if (e && e.target !== e.currentTarget) return;
+            document.getElementById('qrModal').classList.remove('show');
+        }
+
+        function downloadQr() {
+            const canvas = document.getElementById('qrCanvas');
+            if (!canvas) return;
+            const a = document.createElement('a');
+            a.href = canvas.toDataURL('image/png');
+            a.download = 'pixelhop-qr.png';
+            a.click();
+        }
+
+        // Before/After slider interactions
+        function initBeforeAfter(wrap) {
+            const beforeLayer = wrap.querySelector('.ba-before-layer');
+            const handle = wrap.querySelector('.ba-handle');
+            const knob = wrap.querySelector('.ba-knob');
+            const img = wrap.querySelector('img');
+
+            function setRatio(ratio) {
+                ratio = Math.max(0, Math.min(1, ratio));
+                const pct = (ratio * 100) + '%';
+                beforeLayer.style.width = pct;
+                handle.style.left = pct;
+                if (knob) knob.style.left = pct;
+            }
+
+            function updateFromEvent(e) {
+                const rect = wrap.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                setRatio((clientX - rect.left) / rect.width);
+            }
+
+            let dragging = false;
+            handle.addEventListener('mousedown', () => dragging = true);
+            handle.addEventListener('touchstart', () => dragging = true, { passive: true });
+            window.addEventListener('mouseup', () => dragging = false);
+            window.addEventListener('touchend', () => dragging = false);
+            wrap.addEventListener('mousemove', e => { if (dragging) updateFromEvent(e); });
+            wrap.addEventListener('touchmove', e => { if (dragging) updateFromEvent(e); }, { passive: true });
+            wrap.addEventListener('click', updateFromEvent);
+            if (img && img.complete) setRatio(0.5);
+            else if (img) img.addEventListener('load', () => setRatio(0.5));
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.ba-slider-wrap').forEach(initBeforeAfter);
+        });
     </script>
 </body>
 </html>

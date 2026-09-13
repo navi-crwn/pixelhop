@@ -3,11 +3,13 @@
 -- ============================================================
 -- Tanggal    : 2026-09-12
 -- Tujuan     : Menyediakan setting di site_settings untuk tool baru
---              (AI HD Upscale, Magic Eraser, Face Blur, Color Palette)
+--              (AI HD Upscale, Magic Eraser, Face Blur, Color Palette,
+--               QR Code)
 --              agar admin dapat toggle on/off dan mengatur kuota harian:
 --                - Toggle on/off:
 --                    tool_upscale_enabled, tool_erase_enabled,
---                    tool_faceblur_enabled, tool_palette_enabled
+--                    tool_faceblur_enabled, tool_palette_enabled,
+--                    tool_qr_enabled
 --                  plus memastikan toggle AI lama tetap ada:
 --                    tool_ocr_enabled, tool_rembg_enabled
 --                - Kuota harian (dibaca API via
@@ -43,6 +45,7 @@ SET @s := IF(
         (''tool_erase_enabled'',     ''1'',   ''bool'', ''Enable Magic Eraser tool''),
         (''tool_faceblur_enabled'',  ''1'',   ''bool'', ''Enable Face Blur tool''),
         (''tool_palette_enabled'',   ''1'',   ''bool'', ''Enable Color Palette tool''),
+        (''tool_qr_enabled'',        ''1'',   ''bool'', ''Enable QR Code tool''),
         (''tool_ocr_enabled'',       ''1'',   ''bool'', ''Enable OCR tool''),
         (''tool_rembg_enabled'',     ''1'',   ''bool'', ''Enable Remove Background tool''),
         (''upscale_limit_free'',     ''3'',   ''int'',  ''AI HD Upscale daily limit for free users''),

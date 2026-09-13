@@ -33,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
         case 'toggle_tool':
             $tool = $_POST['tool'] ?? '';
             $enabled = (int) ($_POST['enabled'] ?? 1);
-            $allowed = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg', 'upscale', 'erase', 'faceblur', 'palette'];
+            $allowed = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg', 'upscale', 'erase', 'faceblur', 'palette', 'qr'];
             if (in_array($tool, $allowed)) {
                 $gatekeeper->updateSetting("tool_{$tool}_enabled", $enabled);
                 echo json_encode(['success' => true]);
@@ -50,7 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 
 // Get today's usage stats
 $toolStats = [];
-$tools = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg', 'upscale', 'erase', 'faceblur', 'palette'];
+$tools = ['compress', 'resize', 'crop', 'convert', 'ocr', 'rembg', 'upscale', 'erase', 'faceblur', 'palette', 'qr'];
 $toolStatsStmt = $db->prepare("SELECT COUNT(*) FROM usage_logs WHERE tool_name = ? AND DATE(created_at) = CURDATE()");
 foreach ($tools as $tool) {
     $toolStatsStmt->execute([$tool]);
@@ -71,6 +71,7 @@ $toolInfo = [
     'erase' => ['name' => 'Magic Eraser', 'icon' => 'wand-2', 'color' => 'purple', 'type' => 'Python', 'badge' => 'AI', 'enabled' => $gatekeeper->getSetting('tool_erase_enabled', 1)],
     'faceblur' => ['name' => 'Face Blur', 'icon' => 'scan-face', 'color' => 'red', 'type' => 'Python', 'badge' => 'AI', 'enabled' => $gatekeeper->getSetting('tool_faceblur_enabled', 1)],
     'palette' => ['name' => 'Color Palette', 'icon' => 'palette', 'color' => 'green', 'type' => 'Instant', 'badge' => 'Instant', 'enabled' => $gatekeeper->getSetting('tool_palette_enabled', 1)],
+    'qr' => ['name' => 'QR Code', 'icon' => 'qr-code', 'color' => 'cyan', 'type' => 'Instant', 'badge' => 'Instant', 'enabled' => $gatekeeper->getSetting('tool_qr_enabled', 1)],
 ];
 
 // Summary counts derived from $toolInfo so they stay in sync with the registry.

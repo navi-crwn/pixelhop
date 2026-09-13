@@ -105,10 +105,21 @@
     </style>
 
     <script>
+        function notify(msg, type) {
+            type = type || 'error';
+            if (typeof window.showToast === 'function') {
+                window.showToast(msg, type);
+            } else if (typeof showToast === 'function') {
+                showToast(msg, type);
+            } else {
+                console.error(msg);
+            }
+        }
+
         async function handlePalette(e) {
             e.preventDefault();
             if (!fileData.palette) {
-                alert('Please select an image first');
+                notify('Please select an image first', 'error');
                 return;
             }
 
@@ -172,7 +183,7 @@
                                 copied.style.display = 'none';
                             }, 2000);
                         }).catch(() => {
-                            alert('Could not copy. Hex: ' + color.hex);
+                            notify('Could not copy. Hex: ' + color.hex, 'error');
                         });
                     });
 
@@ -181,7 +192,7 @@
 
                 result.classList.add('show');
             } catch (err) {
-                alert('Error: ' + err.message);
+                notify('Error: ' + err.message, 'error');
             }
 
             processing.classList.remove('show');

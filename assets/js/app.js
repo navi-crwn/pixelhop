@@ -739,11 +739,14 @@ function markItemError(index, error) {
     const itemEl = document.getElementById(`queue-item-${index}`);
     
     if (statusEl) {
-        statusEl.innerHTML = `
-            <div class="upload-queue-error" title="${error}">
-                <i data-lucide="alert-circle" class="w-4 h-4 text-red-400"></i>
-            </div>
-        `;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'upload-queue-error';
+        wrapper.title = String(error);
+        const icon = document.createElement('i');
+        icon.setAttribute('data-lucide', 'alert-circle');
+        icon.className = 'w-4 h-4 text-red-400';
+        wrapper.appendChild(icon);
+        statusEl.replaceChildren(wrapper);
         lucide.createIcons();
     }
     
@@ -842,58 +845,108 @@ function showBatchResults() {
 function showBatchSummary(successCount, errorCount) {
     const resultSection = document.getElementById('upload-result');
     const progressSection = document.getElementById('upload-progress');
-    
+
     progressSection.classList.add('hidden');
-    
+
     const errorResults = uploadQueue.results.filter(r => !r.success);
-    
-    let html = `
-        <div class="upload-result-card batch-result">
-            <div class="upload-result-header">
-                <div class="upload-result-icon">
-                    <i data-lucide="alert-circle" class="w-6 h-6 text-red-400"></i>
-                </div>
-                <div class="upload-result-title">
-                    <h4 class="text-white font-semibold">Upload Failed</h4>
-                    <p class="text-white/50 text-sm">${errorCount} file${errorCount > 1 ? 's' : ''} failed to upload</p>
-                </div>
-            </div>
-            
-            <div class="error-list" style="margin: 1rem 0; max-height: 200px; overflow-y: auto;">
-    `;
-    
+
+    // Build result card with DOM APIs (no user values interpolated into HTML)
+    const card = document.createElement('div');
+    card.className = 'upload-result-card batch-result';
+
+    const header = document.createElement('div');
+    header.className = 'upload-result-header';
+
+    const headerIcon = document.createElement('div');
+    headerIcon.className = 'upload-result-icon';
+    const headerIconEl = document.createElement('i');
+    headerIconEl.setAttribute('data-lucide', 'alert-circle');
+    headerIconEl.className = 'w-6 h-6 text-red-400';
+    headerIcon.appendChild(headerIconEl);
+
+    const headerTitle = document.createElement('div');
+    headerTitle.className = 'upload-result-title';
+    const titleH4 = document.createElement('h4');
+    titleH4.className = 'text-white font-semibold';
+    titleH4.textContent = 'Upload Failed';
+    const titleP = document.createElement('p');
+    titleP.className = 'text-white/50 text-sm';
+    titleP.textContent = `${errorCount} file${errorCount > 1 ? 's' : ''} failed to upload`;
+    headerTitle.appendChild(titleH4);
+    headerTitle.appendChild(titleP);
+
+    header.appendChild(headerIcon);
+    header.appendChild(headerTitle);
+    card.appendChild(header);
+
+    const errorList = document.createElement('div');
+    errorList.className = 'error-list';
+    errorList.style.margin = '1rem 0';
+    errorList.style.maxHeight = '200px';
+    errorList.style.overflowY = 'auto';
+
     errorResults.forEach(result => {
-        html += `
-            <div class="error-item" style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; background: rgba(239, 68, 68, 0.1); border-radius: 8px; margin-bottom: 0.5rem;">
-                <i data-lucide="x-circle" class="w-4 h-4 text-red-400 flex-shrink-0"></i>
-                <div style="flex: 1; min-width: 0;">
-                    <div style="color: var(--color-text-primary); font-size: 0.875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${result.file}</div>
-                    <div style="color: var(--color-text-tertiary); font-size: 0.75rem;">${result.error}</div>
-                </div>
-            </div>
-        `;
+        const item = document.createElement('div');
+        item.className = 'error-item';
+        item.style.display = 'flex';
+        item.style.alignItems = 'center';
+        item.style.gap = '0.75rem';
+        item.style.padding = '0.75rem';
+        item.style.background = 'rgba(239, 68, 68, 0.1)';
+        item.style.borderRadius = '8px';
+        item.style.marginBottom = '0.5rem';
+
+        const itemIcon = document.createElement('i');
+        itemIcon.setAttribute('data-lucide', 'x-circle');
+        itemIcon.className = 'w-4 h-4 text-red-400 flex-shrink-0';
+        item.appendChild(itemIcon);
+
+        const textWrap = document.createElement('div');
+        textWrap.style.flex = '1';
+        textWrap.style.minWidth = '0';
+
+        const fileName = document.createElement('div');
+        fileName.style.color = 'var(--color-text-primary)';
+        fileName.style.fontSize = '0.875rem';
+        fileName.style.whiteSpace = 'nowrap';
+        fileName.style.overflow = 'hidden';
+        fileName.style.textOverflow = 'ellipsis';
+        fileName.textContent = result.file;
+
+        const errMsg = document.createElement('div');
+        errMsg.style.color = 'var(--color-text-tertiary)';
+        errMsg.style.fontSize = '0.75rem';
+        errMsg.textContent = result.error;
+
+        textWrap.appendChild(fileName);
+        textWrap.appendChild(errMsg);
+        item.appendChild(textWrap);
+        errorList.appendChild(item);
     });
-    
-    html += `
-            </div>
-            
-            <div class="upload-result-actions">
-                <button onclick="resetUpload()" class="btn-primary">
-                    <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-                    Try Again
-                </button>
-            </div>
-        </div>
-    `;
-    
-    resultSection.innerHTML = html;
+
+    card.appendChild(errorList);
+
+    const actions = document.createElement('div');
+    actions.className = 'upload-result-actions';
+    const tryBtn = document.createElement('button');
+    tryBtn.setAttribute('onclick', 'resetUpload()');
+    tryBtn.className = 'btn-primary';
+    const tryBtnIcon = document.createElement('i');
+    tryBtnIcon.setAttribute('data-lucide', 'refresh-cw');
+    tryBtnIcon.className = 'w-4 h-4';
+    tryBtn.appendChild(tryBtnIcon);
+    tryBtn.appendChild(document.createTextNode('Try Again'));
+    actions.appendChild(tryBtn);
+    card.appendChild(actions);
+
+    resultSection.replaceChildren(card);
     resultSection.classList.remove('hidden');
-    
-    gsap.fromTo(resultSection, 
+
+    gsap.fromTo(resultSection,
         { opacity: 0, y: 20 },
         { opacity: 1, y: 0, duration: 0.4, ease: 'back.out(1.7)' }
     );
-    
+
     lucide.createIcons();
 }
 

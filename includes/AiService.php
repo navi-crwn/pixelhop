@@ -15,6 +15,24 @@ class AiService
     private const MAX_LOAD_AVERAGE = 3.0;
     private const PYTHON_BIN = '/var/www/pichost/python/venv/bin/python3';
 
+    /**
+     * Deterministic HOME for spawned Python processes.
+     *
+     * PHP-FPM's www-data may inherit an empty or wrong HOME. The Python
+     * engines use os.environ.setdefault('HOME', '/var/www') which only
+     * fires when HOME is *absent*. Prefixing the shell command with
+     * HOME=<value> overrides it unconditionally, ensuring model caches
+     * (U2NET_HOME, ~/.cache/…) resolve to where download_models.sh
+     * placed the weights.
+     */
+    private const PROCESS_HOME = '/var/www';
+
+    /**
+     * Default U2NET_HOME — where rembg (BiRefNet / U2-Net) looks for
+     * model weights. Matches scripts/download_models.sh default.
+     */
+    private const U2NET_HOME = '/var/www/.u2net';
+
     private string $pythonDir;
     private int $timeout;
 
@@ -178,7 +196,9 @@ class AiService
 
         $alphaFlag = $alphaMatting ? ' --alpha-matting' : '';
         $command = sprintf(
-            'timeout %ds %s %s %s %s %s%s 2>/dev/null',
+            'HOME=%s U2NET_HOME=%s timeout %ds %s %s %s %s %s%s 2>/dev/null',
+            escapeshellarg(self::PROCESS_HOME),
+            escapeshellarg(self::U2NET_HOME),
             $rembgTimeout,
             escapeshellarg(self::PYTHON_BIN),
             escapeshellarg($scriptPath),

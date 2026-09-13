@@ -323,11 +323,20 @@ function saveMaskInput(ImageHandler $handler): string
 /**
  * Run python/erase_engine.py using the same exec/timeout + JSON contract as
  * UpscaleRunner, without modifying AiService (whose PYTHON_BIN stays fixed).
+ *
+ * HOME and LAMA_MODEL are set explicitly on the command line so the child
+ * process always resolves the ONNX weights to the directory where
+ * scripts/download_models.sh placed them, regardless of what HOME the
+ * PHP-FPM worker inherited.
  */
 function runEraseEngine(string $inputPath, string $maskPath, string $outputPath): array
 {
     $pythonBin = '/var/www/pichost/python/venv/bin/python3';
     $scriptPath = __DIR__ . '/../python/erase_engine.py';
+
+    // Deterministic paths matching scripts/download_models.sh defaults.
+    $processHome = '/var/www';
+    $lamaModel   = '/var/www/.cache/lama/lama.onnx';
 
     if (!file_exists($scriptPath)) {
         return [
@@ -355,7 +364,9 @@ function runEraseEngine(string $inputPath, string $maskPath, string $outputPath)
 
     $timeout = 120;
     $command = sprintf(
-        'timeout %ds %s %s %s %s %s 2>/dev/null',
+        'HOME=%s LAMA_MODEL=%s timeout %ds %s %s %s %s %s 2>/dev/null',
+        escapeshellarg($processHome),
+        escapeshellarg($lamaModel),
         $timeout,
         escapeshellarg($pythonBin),
         escapeshellarg($scriptPath),

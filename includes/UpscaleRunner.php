@@ -13,6 +13,26 @@ class UpscaleRunner
     /** Must match AiService::PYTHON_BIN so production keeps one venv path. */
     private const PYTHON_BIN = '/var/www/pichost/python/venv/bin/python3';
 
+    /**
+     * Deterministic HOME for the spawned Python process.
+     *
+     * PHP-FPM's www-data may inherit an empty or wrong HOME (e.g.
+     * /home/carawin when invoked via CLI). Python's setdefault('HOME')
+     * only fires when the variable is *absent*, not when it is wrong.
+     * Prefixing the command with an explicit HOME= ensures the child
+     * process always resolves ~/.cache/… to the directory where
+     * scripts/download_models.sh placed the ONNX weights.
+     */
+    private const PROCESS_HOME = '/var/www';
+
+    /**
+     * Absolute path to the Real-ESRGAN ONNX model.
+     *
+     * Must match the default in scripts/download_models.sh and the
+     * fallback in python/upscale_engine.py resolve_model_path().
+     */
+    private const REALESRGAN_MODEL = '/var/www/.cache/realesrgan/RealESRGAN_x2plus.onnx';
+
     private string $pythonDir;
 
     public function __construct()
@@ -55,7 +75,9 @@ class UpscaleRunner
 
         $timeout = max(1, $timeout);
         $command = sprintf(
-            'timeout %ds %s %s %s %s %d 2>/dev/null',
+            'HOME=%s REALESRGAN_MODEL=%s timeout %ds %s %s %s %s %d 2>/dev/null',
+            escapeshellarg(self::PROCESS_HOME),
+            escapeshellarg(self::REALESRGAN_MODEL),
             $timeout,
             escapeshellarg(self::PYTHON_BIN),
             escapeshellarg($scriptPath),
